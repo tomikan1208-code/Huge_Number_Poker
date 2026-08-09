@@ -1,0 +1,23 @@
+# 依存関係
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 学習のチェックポイント（大きいので追跡しない。ログと重みJSONは残す）
+train/models/*.pt
+
+# ブラウザプロファイル（launcher.py がアプリモードで使う）
+train/.browser-profile/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 一時ファイル
+*.log
+*.tmp

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n '^/\\\\*\\\\|^\\\\/\\\\* =\\\\|^:root\\\\|^\\\\.[a-z-]* *{' css/style.css)",
+      "Bash(node audit.js)"
+    ]
+  }
+}

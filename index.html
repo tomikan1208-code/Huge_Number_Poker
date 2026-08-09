@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>巨大数ポーカー</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- ===== ホーム画面 ===== -->
+  <div id="home-view" class="home-screen">
+    <div class="home-container">
+      <div class="logo-area">
+        <h1><span>🔢</span>巨大数ポーカー</h1>
+        <p class="subtitle text-gradient">Huge Number Poker — 数式で巨大数を作り、ポーカーで駆け引きせよ！</p>
+      </div>
+
+      <div class="home-actions">
+        <button id="btn-show-setup" class="btn-main-action primary">
+          <span class="btn-icon">🖥️</span>
+          <div class="btn-text">
+            <strong>1端末で遊ぶ</strong>
+            <span>Local Hot-Seat Battle</span>
+          </div>
+        </button>
+
+        <button onclick="location.href='online.html'" class="btn-main-action secondary">
+          <span class="btn-icon">🌐</span>
+          <div class="btn-text">
+            <strong>インターネット対戦</strong>
+            <span>Online Multiplayer</span>
+          </div>
+        </button>
+
+        <button id="btn-show-solo" class="btn-main-action secondary">
+          <span class="btn-icon">🎯</span>
+          <div class="btn-text">
+            <strong>ソロモード</strong>
+            <span>Score Attack</span>
+          </div>
+        </button>
+
+        <button id="btn-show-rules" class="btn-main-action secondary">
+          <span class="btn-icon">📖</span>
+          <div class="btn-text">
+            <strong>ルール</strong>
+            <span>How to Play</span>
+          </div>
+        </button>
+      </div>
+
+      <div class="home-footer">
+        <p class="version">v1.0.0</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== セットアップ画面 ===== -->
+  <div id="setup-view" class="launcher-screen hidden">
+    <div class="setup-container">
+      <h2>⚙️ ゲーム設定</h2>
+
+      <div class="setup-section">
+        <h3>プレイヤー</h3>
+        <div class="option-row">
+          <label>プレイヤー数</label>
+          <input type="number" id="player-count" min="2" max="6" value="4">
+        </div>
+        <div class="option-row">
+          <label>
+            <input type="checkbox" id="cpu-mode" checked>
+            自分以外をCPUにする
+          </label>
+        </div>
+        <div class="option-row">
+          <label>CPUの強さ</label>
+          <select id="cpu-level">
+            <option value="novice">初級（見習い）</option>
+            <option value="casual" selected>中級（常連）</option>
+            <option value="skilled">上級（計算屋）</option>
+            <option value="expert">達人（暗算名人）</option>
+            <option value="master">超人（グランドマスター）</option>
+          </select>
+        </div>
+        <p class="setup-note">
+          CPUは人間と同じように<strong>計算を間違えます</strong>。式の難しさ（中間結果の桁数・
+          作業記憶への負荷・演算子の切替）と、ポットから決まる計算時間で正答率が変わります。
+        </p>
+        <div class="player-name-inputs" id="player-name-inputs"></div>
+      </div>
+
+      <div class="setup-section">
+        <h3>チップ設定</h3>
+        <div class="option-row">
+          <label>初期チップ</label>
+          <input type="number" id="initial-chips" min="100" max="100000" step="100" value="1000">
+        </div>
+        <div class="option-row">
+          <label>小ブラインド</label>
+          <input type="number" id="small-blind" min="1" max="10000" value="10">
+        </div>
+        <div class="option-row">
+          <label>大ブラインド</label>
+          <input type="number" id="big-blind" min="2" max="20000" value="20">
+        </div>
+        <div class="option-row">
+          <label>アンティ</label>
+          <input type="number" id="ante" min="0" max="5000" value="5">
+        </div>
+      </div>
+
+      <div class="setup-section">
+        <h3>時間設定</h3>
+        <div class="option-row">
+          <label>ベット制限時間（秒）</label>
+          <input type="number" id="bet-time-limit" min="5" max="60" value="10">
+        </div>
+        <div class="option-row">
+          <label>ディーラー制限時間（秒）</label>
+          <input type="number" id="dealer-time-limit" min="10" max="120" value="20">
+        </div>
+      </div>
+
+      <div class="setup-section">
+        <h3>進行設定</h3>
+        <div class="option-row">
+          <label>レベルアップ間隔（ハンド）</label>
+          <input type="number" id="level-up-hands" min="1" max="20" value="5">
+        </div>
+        <div class="option-row">
+          <label>デッキ数</label>
+          <input type="number" id="deck-count" min="1" max="3" value="1">
+        </div>
+        <div class="option-row">
+          <label>
+            <input type="checkbox" id="auto-calc-mode">
+            システムが自動計算する（答えの手入力なし・計算ミス判定なし）
+          </label>
+        </div>
+      </div>
+
+      <div class="setup-actions">
+        <button id="btn-start-game" class="btn-premium primary">ゲーム開始</button>
+        <button id="btn-back-home" class="btn-premium secondary">戻る</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ソロモード画面 ===== -->
+  <div id="solo-view" class="launcher-screen hidden">
+    <div class="setup-container">
+      <h2>🎯 ソロモード</h2>
+      <p style="text-align:center; color:var(--text-secondary); margin-bottom:1.5rem;">
+        7枚のカードから5枚以下で最大の数式を作ろう！
+      </p>
+
+      <div class="setup-section">
+        <h3>設定</h3>
+        <div class="option-row">
+          <label>デッキ数</label>
+          <input type="number" id="solo-deck-count" min="1" max="3" value="1">
+        </div>
+      </div>
+
+      <div class="setup-actions">
+        <button id="btn-start-solo" class="btn-premium primary">開始</button>
+        <button id="btn-back-home-solo" class="btn-premium secondary">戻る</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ルール画面 ===== -->
+  <div id="rules-view" class="launcher-screen hidden">
+    <div class="setup-container">
+      <h2>📖 ルール</h2>
+      <div style="color:var(--text-secondary); line-height:1.8; font-size:0.9rem;">
+        <h3 style="color:var(--accent-primary); margin-bottom:0.5rem;">ゲーム概要</h3>
+        <p>ポーカーの駆け引き（チップ・ベット・ブラフ）と、配られたカードから数式を組んで巨大数を作るパズルを融合させたゲームです。</p>
+
+        <h3 style="color:var(--accent-primary); margin:1rem 0 0.5rem;">基本ルール</h3>
+        <ul style="padding-left:1.5rem;">
+          <li>各プレイヤーに7枚のカードが配られます</li>
+          <li>7枚の中から5枚以下を自由に選択して数式を構築</li>
+          <li>カード連結禁止（2と3をくっつけて「23」にするのは不可）</li>
+          <li>ショーダウン時に数式の評価値が最大のプレイヤーが勝利</li>
+          <li>同値の場合は山分け</li>
+          <li>他が全員フォールドしたら、残った1人が数式を出さずに不戦勝</li>
+          <li><strong>全員が失格（勝者なし）のときは全員スコア0の同点</strong>。ポットは持ち越さず、
+              各自がベットしたぶんをそのまま払い戻す</li>
+        </ul>
+
+        <h3 style="color:var(--accent-primary); margin:1rem 0 0.5rem;">カード</h3>
+        <ul style="padding-left:1.5rem;">
+          <li>数字カード: 2〜9</li>
+          <li>演算子カード: +（加算）、×（乗算）、^（べき乗）、!（階乗）、P（順列）、↑↑（テトレーション）</li>
+        </ul>
+
+        <h3 style="color:var(--accent-primary); margin:1rem 0 0.5rem;">ゲームの流れ</h3>
+        <ol style="padding-left:1.5rem;">
+          <li>配札（7枚）</li>
+          <li>ベットラウンド1（フォールド/チェック/コール/レイズ/オールイン）</li>
+          <li>カード交換（任意の枚数）</li>
+          <li>ベットラウンド2</li>
+          <li>数式構築・結果入力</li>
+          <li>ショーダウン（公開・比較）</li>
+          <li>精算・次ハンドへ</li>
+        </ol>
+
+        <h3 style="color:var(--accent-primary); margin:1rem 0 0.5rem;">演算子の優先順位</h3>
+        <p><code>^</code>・<code>↑↑</code>（右結合） ＞ <code>×</code> ＞ <code>+</code>・<code>P</code>（左結合）</p>
+        <p>例: <code>2×3^2</code> は 18、<code>2^3^2</code> は 2<sup>9</sup>=512、<code>2+3P2</code> は (2+3)P2=20 です。</p>
+
+        <h3 style="color:var(--accent-primary); margin:1rem 0 0.5rem;">計算ミスについて</h3>
+        <p>プレイヤーが入力した結果とシステムの計算結果が一致しない場合、そのプレイヤーは失格（×）となります。計算ミスによるブラフも戦略の一部です！</p>
+
+        <h3 style="color:var(--accent-primary); margin:1rem 0 0.5rem;">巨大数の扱い（どこまで計算するか）</h3>
+        <p>数式の規模に応じて、要求される答えの形式が自動的に変わります。入力欄の上にその都度表示されます。</p>
+        <ul style="padding-left:1.5rem;">
+          <li><strong>厳密</strong>（1000桁以下）… 値そのものを入力。例: <code>125</code></li>
+          <li><strong>桁数まで確定</strong>… 桁数で答える。例: <code>369693100桁</code>（<code>10^30</code> のような概数表記も可）</li>
+          <li><strong>タワー規模</strong>（桁数すら書けない）… 規模で答える。例: <code>10^10^30</code>、<code>10↑↑5</code></li>
+        </ul>
+        <p>比較は「10 を何段重ねたか（高さ）→ 先頭の指数」の順で行うため、直接計算できない数どうしでも必ず順位が決まります。</p>
+        <p style="color:var(--text-muted);">※ 有効数字は約15桁です。10↑↑4 を超える領域では、1段下の演算（+ や × や !）は値を変えないため同値＝山分けとして扱います。</p>
+      </div>
+
+      <div class="setup-actions">
+        <button id="btn-back-home-rules" class="btn-premium secondary">戻る</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ゲーム画面 ===== -->
+  <div id="game-view" class="game-screen hidden">
+    <header class="game-header">
+      <div class="header-left">
+        <button id="btn-quit-game" class="btn-link">← 退出</button>
+        <span class="header-title">🔢 巨大数ポーカー</span>
+        <span class="header-info">レベル: <span class="level-badge" id="level-display">1</span></span>
+        <span class="header-info" id="blind-display">SB: 10 / BB: 20</span>
+        <span class="header-info" id="hand-display">ハンド #1</span>
+      </div>
+      <div class="header-right">
+        <span class="pot-display">💰 ポット: <span id="pot-display">0</span></span>
+        <span class="phase-badge" id="phase-display">—</span>
+        <span class="timer-display hidden" id="timer-display">⏱ 10</span>
+      </div>
+    </header>
+
+    <div class="table-area">
+      <!-- 対戦相手 -->
+      <div class="opponents-area" id="opponents-area"></div>
+
+      <!-- 中央ポット -->
+      <div class="center-pot">
+        <div class="pot-amount" id="center-pot-amount">0</div>
+        <div class="pot-label">POT</div>
+      </div>
+
+      <!-- 自分の領域 -->
+      <div class="my-area" id="my-area">
+        <div class="my-info">
+          <span class="my-name" id="my-name">あなた</span>
+          <span class="my-chips" id="my-chips">💰 1000</span>
+        </div>
+
+        <!-- 手札 -->
+        <div class="hand-area" id="hand-area"></div>
+
+        <!-- アクションバー（ベット） -->
+        <div class="action-bar hidden" id="betting-actions">
+          <button class="action-btn fold" id="btn-fold">フォールド</button>
+          <button class="action-btn check" id="btn-check">チェック</button>
+          <button class="action-btn call" id="btn-call">コール</button>
+          <input type="number" class="raise-input" id="raise-amount" min="0" placeholder="額">
+          <button class="action-btn raise" id="btn-raise">レイズ</button>
+          <button class="action-btn allin" id="btn-allin">オールイン</button>
+        </div>
+
+        <!-- 交換フェーズ -->
+        <div class="exchange-area hidden" id="exchange-area">
+          <p class="exchange-hint">交換したいカードをクリックして選択し、「交換する」を押してください</p>
+          <button class="exchange-btn" id="btn-exchange">交換する</button>
+        </div>
+
+        <!-- 3層構造: プレビュー（上）/ D&D（中）/ 手札（下） -->
+        <div class="main-workspace hidden" id="main-workspace">
+          <!-- 上段: 数式プレビュー -->
+          <div class="preview-area">
+            <div class="preview-label">Formula Preview</div>
+            <div class="formula-preview" id="formula-preview">数式を組み立てるとここに表示されます</div>
+          </div>
+
+          <!-- 中段: D&D配置エリア（中身は builder.js が生成する） -->
+          <div class="builder-area" id="builder-area"></div>
+
+          <!-- 括弧カード（常設ツール・枚数制限の対象外） -->
+          <div class="paren-tools">
+            <div class="paren-card" data-paren="(" draggable="true">(</div>
+            <div class="paren-card" data-paren=")" draggable="true">)</div>
+          </div>
+
+          <!-- 結果入力 -->
+          <div class="declaration-hint" id="declaration-hint">カードを並べると、答えの入力形式がここに表示されます</div>
+          <div class="result-input-row" id="result-input-row">
+            <input type="text" class="result-input" id="result-input" placeholder="答えを入力（例: 125 / 1234桁 / 10^10^30）">
+            <button class="submit-btn" id="btn-submit-formula">提出</button>
+          </div>
+          <div class="declaration-preview" id="declaration-preview"></div>
+        </div>
+      </div>
+
+      <!-- ゲームログ -->
+      <div class="log-panel" id="log-panel"></div>
+    </div>
+  </div>
+
+  <!-- ===== ショーダウンオーバーレイ ===== -->
+  <div id="showdown-overlay" class="showdown-overlay hidden">
+    <div class="showdown-container">
+      <h2>🏆 ショーダウン</h2>
+      <div class="showdown-list" id="showdown-list"></div>
+      <div class="showdown-winner" id="showdown-winner"></div>
+      <button class="next-hand-btn" id="btn-next-hand">次のハンドへ</button>
+    </div>
+  </div>
+
+  <!-- ===== 確認ダイアログ ===== -->
+  <div id="confirm-dialog" class="confirm-dialog hidden">
+    <div class="dialog-box">
+      <h3>数式を確定しますか？</h3>
+      <div class="dialog-formula" id="confirm-formula"></div>
+      <div class="dialog-actions">
+        <button class="btn-premium primary" id="btn-confirm-yes">確定</button>
+        <button class="btn-premium secondary" id="btn-confirm-no">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="notification" class="notification hidden"></div>
+
+  <script src="js/engine.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/ai-cognition.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/ai-policy.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/builder.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>

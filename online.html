@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>巨大数ポーカー - オンライン対戦</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="main-wrapper">
+    <!-- ===== ロビー画面 ===== -->
+    <div id="lobby-screen" class="screen active">
+      <div class="lobby-container glass" id="online-lobby-container">
+        <h1 class="logo">🔢 巨大数ポーカー <span class="badge">ONLINE</span></h1>
+
+        <div id="lobby-main" class="lobby-section">
+          <div class="lobby-actions">
+            <div class="input-group">
+              <input type="text" id="player-name-input" placeholder="プレイヤー名" maxlength="12" autocomplete="username">
+            </div>
+            <button id="btn-create-room" class="btn-premium primary">部屋を作る</button>
+            <div class="divider"><span>または</span></div>
+            <div class="input-group">
+              <input type="text" id="room-code-input" placeholder="部屋コード (4文字)" maxlength="4">
+            </div>
+            <button id="btn-join-room" class="btn-premium secondary">部屋に入る</button>
+            <button id="btn-spectate" class="btn-premium secondary">👻 観戦で参加</button>
+          </div>
+        </div>
+
+        <div id="lobby-waiting" class="lobby-section hidden">
+          <div class="room-info glass">
+            <span class="label">部屋コード</span>
+            <div id="room-code-display" class="code">----</div>
+          </div>
+
+          <div class="player-list glass">
+            <h3>参加者 <span id="player-count">0</span>人</h3>
+            <ul id="lobby-player-list"></ul>
+          </div>
+
+          <div class="spectator-list glass">
+            <h3>観戦者 <span id="spectator-count">0</span>人</h3>
+            <ul id="lobby-spectator-list"></ul>
+          </div>
+
+          <div id="host-settings" class="host-settings glass hidden">
+            <h3>⚙️ ゲーム設定（ホストのみ）</h3>
+            <div class="settings-box">
+              <label>初期チップ: <input type="number" id="online-initial-chips" min="100" max="100000" step="100" value="1000"></label>
+            </div>
+            <div class="settings-box">
+              <label>小ブラインド: <input type="number" id="online-small-blind" min="1" max="10000" value="10"></label>
+            </div>
+            <div class="settings-box">
+              <label>大ブラインド: <input type="number" id="online-big-blind" min="2" max="20000" value="20"></label>
+            </div>
+            <div class="settings-box">
+              <label>アンティ: <input type="number" id="online-ante" min="0" max="5000" value="5"></label>
+            </div>
+            <div class="settings-box">
+              <label>ベット制限時間（秒）: <input type="number" id="online-bet-time" min="5" max="60" value="10"></label>
+            </div>
+            <div class="settings-box">
+              <label>ディーラー制限時間（秒）: <input type="number" id="online-dealer-time" min="10" max="120" value="20"></label>
+            </div>
+            <div class="settings-box">
+              <label>レベルアップ間隔: <input type="number" id="online-level-up" min="1" max="20" value="5"></label>
+            </div>
+            <div class="settings-box">
+              <label>デッキ数: <input type="number" id="online-deck-count" min="1" max="3" value="1"></label>
+            </div>
+            <div class="settings-box">
+              <label><input type="checkbox" id="online-auto-calc"> システムが自動計算する（答えの手入力なし・計算ミス判定なし）</label>
+            </div>
+          </div>
+
+          <button id="btn-start-game" class="btn-start-massive" disabled>
+            ゲーム開始
+            <span class="btn-sub">WAITING FOR PLAYERS</span>
+          </button>
+
+          <button id="btn-cancel-room" class="btn-link">キャンセル</button>
+        </div>
+
+        <div id="lobby-status" class="status-msg"></div>
+      </div>
+    </div>
+
+    <!-- ===== ゲーム画面 ===== -->
+    <div id="game-screen" class="screen hidden">
+      <header class="game-header">
+        <div class="header-left">
+          <a href="online.html" class="back-link">← 退出</a>
+          <span class="header-title">🔢 巨大数ポーカー - ONLINE</span>
+          <div class="room-pill">部屋: <span id="room-id-text">---</span></div>
+        </div>
+        <div class="header-right">
+          <span class="header-info">レベル: <span class="level-badge" id="online-level">1</span></span>
+          <span class="header-info" id="online-blind">SB: 10 / BB: 20</span>
+          <span class="header-info" id="online-hand">ハンド #1</span>
+          <span class="pot-display">💰 ポット: <span id="online-pot">0</span></span>
+          <span class="phase-badge" id="online-phase">—</span>
+          <span class="timer-display hidden" id="online-timer">⏱ 10</span>
+        </div>
+      </header>
+
+      <div class="table-area">
+        <div class="opponents-area" id="online-opponents"></div>
+
+        <div class="center-pot">
+          <div class="pot-amount" id="online-center-pot">0</div>
+          <div class="pot-label">POT</div>
+        </div>
+
+        <!-- 3層構造: プレビュー（上）/ D&D（中）/ 手札（下） -->
+        <div class="main-workspace hidden" id="online-main-workspace">
+          <!-- 上段: 数式プレビュー -->
+          <div class="preview-area">
+            <div class="preview-label">Formula Preview</div>
+            <div class="formula-preview" id="online-formula-preview">数式を組み立てるとここに表示されます</div>
+          </div>
+
+          <!-- 中段: D&D配置エリア（中身は builder.js が生成する） -->
+          <div class="builder-area" id="online-builder-area"></div>
+
+          <!-- 括弧カード（常設ツール・枚数制限の対象外） -->
+          <div class="paren-tools">
+            <div class="paren-card" data-paren="(" draggable="true">(</div>
+            <div class="paren-card" data-paren=")" draggable="true">)</div>
+          </div>
+
+          <!-- 結果入力 -->
+          <div class="declaration-hint" id="online-declaration-hint">カードを並べると、答えの入力形式がここに表示されます</div>
+          <div class="result-input-row" id="online-result-input-row">
+            <input type="text" class="result-input" id="online-result-input" placeholder="答えを入力（例: 125 / 1234桁 / 10^10^30）">
+            <button class="submit-btn" id="online-btn-submit">提出</button>
+          </div>
+          <div class="declaration-preview" id="online-declaration-preview"></div>
+        </div>
+
+        <!-- 自分の領域（一番下） -->
+        <div class="my-area" id="online-my-area">
+          <div class="my-info">
+            <span class="my-name" id="online-my-name">あなた</span>
+            <span class="my-chips" id="online-my-chips">💰 1000</span>
+          </div>
+
+          <div class="hand-area" id="online-hand-area"></div>
+
+          <div class="action-bar hidden" id="online-betting-actions">
+            <button class="action-btn fold" id="online-btn-fold">フォールド</button>
+            <button class="action-btn check" id="online-btn-check">チェック</button>
+            <button class="action-btn call" id="online-btn-call">コール</button>
+            <input type="number" class="raise-input" id="online-raise-amount" min="0" placeholder="額">
+            <button class="action-btn raise" id="online-btn-raise">レイズ</button>
+            <button class="action-btn allin" id="online-btn-allin">オールイン</button>
+          </div>
+
+          <div class="exchange-area hidden" id="online-exchange-area">
+            <p class="exchange-hint">交換したいカードをクリックして選択し、「交換する」を押してください</p>
+            <button class="exchange-btn" id="online-btn-exchange">交換する</button>
+          </div>
+        </div>
+
+        <div class="log-panel" id="online-log-panel"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ショーダウンオーバーレイ ===== -->
+  <div id="online-showdown-overlay" class="showdown-overlay hidden">
+    <div class="showdown-container">
+      <h2>🏆 ショーダウン</h2>
+      <div class="showdown-list" id="online-showdown-list"></div>
+      <div class="showdown-winner" id="online-showdown-winner"></div>
+      <button class="next-hand-btn" id="online-btn-next-hand">次のハンドへ</button>
+    </div>
+  </div>
+
+  <!-- ===== 確認ダイアログ ===== -->
+  <div id="online-confirm-dialog" class="confirm-dialog hidden">
+    <div class="dialog-box">
+      <h3>数式を確定しますか？</h3>
+      <div class="dialog-formula" id="online-confirm-formula"></div>
+      <div class="dialog-actions">
+        <button class="btn-premium primary" id="online-btn-confirm-yes">確定</button>
+        <button class="btn-premium secondary" id="online-btn-confirm-no">キャンセル</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="online-notification" class="notification hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/builder.js"></script>
+  <script src="js/online-manager.js"></script>
+  <script src="js/online-lobby.js"></script>
+  <script src="js/online-game.js"></script>
+</body>
+</html>
