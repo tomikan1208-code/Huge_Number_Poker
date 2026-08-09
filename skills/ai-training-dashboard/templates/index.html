@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 学習コントロールパネル</title>
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="header">
+    <div class="brand">
+        <div class="brand-mark">🎮</div>
+        <div>
+            <div class="brand-title" id="appTitle">AI 学習コントロールパネル</div>
+            <div class="brand-sub">強化学習ダッシュボード</div>
+        </div>
+    </div>
+    <div class="header-right">
+        <div class="status-badge">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">待機中</span>
+            <b id="statusGen"></b>
+        </div>
+        <button class="btn btn-primary" id="startBtn">▶ 学習開始</button>
+        <button class="btn btn-secondary" id="stopBtn" disabled>■ 停止</button>
+        <button class="btn btn-ghost btn-icon" id="settingsBtn" title="設定">⚙️</button>
+    </div>
+</header>
+
+<nav class="tabbar">
+    <div class="segmented" id="tabbar">
+        <button data-tab="progress" class="active">進捗</button>
+        <button data-tab="charts">グラフ</button>
+    </div>
+</nav>
+
+<main class="main">
+
+    <section class="view active" id="view-progress">
+        <div class="card">
+            <div class="card-head">
+                <div class="card-title">現在の状態</div>
+                <div class="card-note" id="progressNote">待機中</div>
+            </div>
+            <div class="tiles" id="progressTiles"></div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <div class="card-title">世代の記録</div>
+                <div class="card-note" id="genCountNote"></div>
+            </div>
+            <div class="table-wrap">
+                <div class="table-scroll">
+                    <table id="genTable">
+                        <thead><tr id="genHead"></tr></thead>
+                        <tbody id="genTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <details class="raw-log">
+            <summary>生ログを表示</summary>
+            <div class="log-view" id="logView"></div>
+        </details>
+    </section>
+
+    <section class="view" id="view-charts">
+        <!-- フィルタは全グラフ共通。個々のグラフの中には置かない -->
+        <div class="filter-row">
+            <span class="filter-label">表示範囲</span>
+            <div class="chart-toolbar" id="rangeButtons">
+                <button class="btn btn-ghost" data-range="100">直近100世代</button>
+                <button class="btn btn-ghost active" data-range="0">全期間</button>
+            </div>
+            <span class="filter-note">数値の一覧は「進捗」タブの表で確認できます</span>
+        </div>
+        <div id="chartCards"></div>
+    </section>
+
+</main>
+
+<div class="overlay" id="settingsOverlay"></div>
+<aside class="panel" id="settingsPanel">
+    <div class="panel-head">
+        <div class="panel-title">⚙️ 学習設定</div>
+        <button class="btn btn-ghost btn-icon" id="settingsClose">✕</button>
+    </div>
+    <div class="panel-body">
+        <div class="field">
+            <label class="field-label" for="modeSelect">学習モード</label>
+            <select class="select" id="modeSelect"></select>
+        </div>
+        <div class="field-row">
+            <div class="field">
+                <label class="field-label" for="gensInput">回す世代数</label>
+                <input type="number" class="input" id="gensInput" value="20" min="1">
+            </div>
+            <div class="field">
+                <label class="field-label" for="envsInput">環境数</label>
+                <input type="number" class="input" id="envsInput" placeholder="自動" min="64" step="64">
+            </div>
+        </div>
+        <div class="field-help">環境数は空欄ならGPUのVRAMに合わせて自動で決まります。</div>
+    </div>
+</aside>
+
+<script src="/static/chart.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
