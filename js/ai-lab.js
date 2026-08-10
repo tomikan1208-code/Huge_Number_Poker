@@ -405,6 +405,7 @@
     renderAnswer(ev, current);
     renderRates(current, cond);
     renderSamples(current);
+    renderTrace(current);
     renderStats(current, cond);
     renderLevelTable(rows, cond);
     renderSweep(formulaKey, ev, cond);
@@ -515,11 +516,66 @@
     }
   }
 
+  /** 手順の種類ごとの色。どこに時間を食われているか一目で分かるようにする */
+  const TRACE_KIND = {
+    mul: ['筆算（掛け算）', '#4a8fd6'],
+    add: ['筆算（足し算）', '#3da97a'],
+    recall: ['記憶から引く', '#f5c842'],
+    write: ['書くだけ', '#9a9ab0'],
+    setup: ['画面の操作', '#7a4fa3'],
+    other: ['段取り', '#6a6a80'],
+  };
+
+  function renderTrace(row) {
+    const body = $('trace-table');
+    const trace = row.analysis.trace || [];
+
+    if (trace.length === 0) {
+      body.innerHTML = '<tr><td colspan="6" class="lab-muted">内訳を取れない式（対数流儀 / 解けない式）</td></tr>';
+      $('trace-summary').textContent = '';
+      return;
+    }
+
+    const total = trace.reduce((s, t) => s + t.time, 0);
+    let cum = 0;
+    body.innerHTML = trace.map((t, i) => {
+      cum += t.time;
+      const [kindLabel, color] = TRACE_KIND[t.kind] || TRACE_KIND.other;
+      return `
+        <tr>
+          <td class="num">${i + 1}</td>
+          <td class="lab-formula-cell">${esc(t.label)}
+            <span class="lab-muted">／ ${esc(kindLabel)}</span></td>
+          <td class="num">${t.time.toFixed(1)}</td>
+          <td class="num">${cum.toFixed(1)}</td>
+          <td class="num">${t.risk > 0 ? pct(t.risk) : '—'}</td>
+          <td class="lab-bar-cell">
+            <span class="lab-bar" style="width:${Math.max(2, (t.time / total) * 150)}px;background:${color};"></span>
+          </td>
+        </tr>`;
+    }).join('');
+
+    // 種類ごとの小計
+    const byKind = {};
+    for (const t of trace) byKind[t.kind] = (byKind[t.kind] || 0) + t.time;
+    const parts = Object.keys(byKind)
+      .sort((a, b) => byKind[b] - byKind[a])
+      .map((k) => `${(TRACE_KIND[k] || TRACE_KIND.other)[0]} ${byKind[k].toFixed(1)}秒`)
+      .join(' ／ ');
+
+    $('trace-summary').innerHTML =
+      `合計 ${total.toFixed(1)}秒 ＝ ${esc(parts)}<br>` +
+      `内訳の秒数は、演算子の切替・計算の速さ・作業記憶の超過を反映済み` +
+      `（合計が所要時間に一致する）。画面の操作と答えの入力は計算の速さで割っていない。`;
+  }
+
   function renderStats(row, cond) {
     const a = row.analysis;
     const acc = row.acc;
     const items = [
       ['所要時間（初回）', formatSeconds(a.requiredTime)],
+      ['うち計算', formatSeconds(a.calcTime || 0)],
+      ['うち操作＋入力', formatSeconds((a.setupTime || 0) + (a.transcribe || 0))],
       ['与えた時間', formatSeconds(cond.seconds)],
       ['余裕比 ratio', acc.ratio.toFixed(2)],
       ['間に合う確率', acc.pFinish.toFixed(3)],
@@ -654,8 +710,7 @@
     ['SYSTEMATIC_SLOPE', '同・難易度の効き', 0.05],
     ['MUL_PER_PARTIAL', '部分積1つの秒数', 0.05],
     ['MUL_PER_DIGIT', '桁揃え+加算の秒数', 0.05],
-    ['PLANNING_BASE', '段取り時間の基礎（秒）', 0.5],
-    ['PLANNING_PER_CARD', '段取り時間/カード1枚', 0.1],
+    ['SETUP_TIME', '式制作＋回答入力（秒）', 1],
     ['WRITE_PER_DIGIT', '数字1文字を書く秒数', 0.05],
     ['TIME_SIGMA', '所要時間のばらつき σ', 0.05],
     ['RUSH_THRESHOLD', '焦り始める余裕比', 0.05],
