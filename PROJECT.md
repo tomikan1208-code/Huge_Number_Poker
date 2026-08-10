@@ -891,6 +891,8 @@ AIは「**大きさを少し諦めて、確実に当てられる式を選ぶ**�
 | | 何が起きるか |
 |---|---|
 | `.vbs` を UTF-8 で保存 | Windows Script Host が ANSI として読み、日本語コメントが化けて次の行のコードを巻き込む。**エラーも出ずに何も起動しない**。UTF-16LE(BOM付き) で保存する |
+| `.bat` に日本語（UTF-8）＋ `chcp 65001` | cmd.exe はファイル位置をバイト単位で追うので、コードページが変わるとマルチバイト文字で同期を失い、**行の途中から実行する**。`'...' is not recognized as an internal or external command` が延々出る。`AI学習コントロールパネル.bat` は **ASCII のみ**にし、日本語は `launcher.py --console` に寄せた |
+| テンプレートの `<AppName>` を置換し忘れ | Windows はファイル名に `<` `>` を使えないので `os.makedirs` が WinError 123 で落ちる。しかも**サーバーは起動済み**なので「動いているのに窓が出ない」になる。`APP_DIR` に集約した |
 | `pythonw.exe` で `print()` | コンソールが無いと `sys.stdout` が `None` になり、`print()` が例外で即死。画面には何も出ない。`launcher.py:_ensure_streams()` がログファイルへ逃がしている |
 | 空きポート判定に `SO_REUSEADDR` | Windows では使用中のポートにも bind できる（Linuxと逆）。二重起動する。`find_free_port()` では付けていない |
 

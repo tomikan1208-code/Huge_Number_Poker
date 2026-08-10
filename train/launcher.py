@@ -33,6 +33,11 @@ import time
 import urllib.error
 import urllib.request
 
+# %LOCALAPPDATA% の下に作るフォルダ名。ログとブラウザのプロフィールを置く。
+# テンプレートの <AppName> のままにしておくと、Windows はファイル名に
+# < と > を使えないので os.makedirs が WinError 123 で落ちる。
+APP_DIR = 'HugeNumberPokerAI'
+
 _BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _BASE)
 
@@ -47,7 +52,7 @@ def _ensure_streams():
     log_path = None
     if sys.stdout is None or sys.stderr is None:
         log_dir = os.path.join(
-            os.environ.get('LOCALAPPDATA', tempfile.gettempdir()), 'HugeNumberPokerAI')
+            os.environ.get('LOCALAPPDATA', tempfile.gettempdir()), APP_DIR)
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, 'app.log')
         stream = open(log_path, 'a', encoding='utf-8', errors='replace', buffering=1)
@@ -81,30 +86,82 @@ def _message_box(title, text):
         pass
 
 
-def check_dependencies():
-    """起動前に必要なものが揃っているか確かめる。
-
-    flask   … 無いとこの画面自体が出せない（致命的）
-    torch   … 無くても画面は出るが、学習を開始できない
-    numpy   … 同上
-    node    … 環境（ゲームのルール）が Node 側にあるので学習に必須
-    """
+def _scan_dependencies():
+    """何が足りないかを調べる。(致命的に足りないもの, 学習に足りないもの)"""
     missing_fatal, missing_train = [], []
 
-    for mod, label in [('flask', 'flask')]:
+    for mod in ['flask']:
         try:
             __import__(mod)
         except ImportError:
-            missing_fatal.append(label)
+            missing_fatal.append(mod)
 
-    for mod, label in [('torch', 'torch'), ('numpy', 'numpy')]:
+    for mod in ['torch', 'numpy']:
         try:
             __import__(mod)
         except ImportError:
-            missing_train.append(label)
+            missing_train.append(mod)
 
     if not shutil.which('node'):
         missing_train.append('Node.js（環境サーバーに必要）')
+
+    return missing_fatal, missing_train
+
+
+def check_dependencies_console():
+    """コンソールから起動されたとき用。足りなければその場で入れられるようにする。
+
+    もとは .bat 側でやっていたが、日本語を含む UTF-8 の .bat は
+    `chcp 65001` と噛み合わず、cmd がファイル位置を見失って
+    **行の途中から実行してしまう**（実際に文字化けして落ちた）。
+    文字を出す仕事はすべて Python に寄せ、.bat は ASCII だけにした。
+    """
+    print(f'\n  {APP_TITLE} コントロールパネル')
+    print(f'  {"─" * 46}')
+    print('  普段は「AI学習コントロールパネル.vbs」を使ってください。')
+    print('  （コンソールが出ず、アプリらしく開きます）')
+    print('  こちらは起動しないときに原因を見るためのものです。\n')
+
+    missing_fatal, missing_train = _scan_dependencies()
+    missing_pip = [m for m in missing_fatal + missing_train if not m.startswith('Node')]
+    needs_node = any(m.startswith('Node') for m in missing_train)
+
+    if not missing_fatal and not missing_train:
+        print('  依存パッケージ: すべて揃っています\n')
+        return
+
+    print(f'  足りないもの: {", ".join(missing_fatal + missing_train)}\n')
+
+    if missing_pip:
+        req = os.path.join(_BASE, 'requirements.txt')
+        try:
+            answer = input('  いま pip で入れますか？ [Y/n]: ').strip().lower()
+        except EOFError:
+            answer = 'n'
+        if answer != 'n':
+            print()
+            subprocess.call([sys.executable, '-m', 'pip', 'install', '-r', req])
+            print()
+            missing_fatal, missing_train = _scan_dependencies()
+
+    if needs_node:
+        print('  [注意] Node.js が見つかりません。')
+        print('         環境（ゲームのルール）は Node 側にあるので、')
+        print('         これが無いと学習を開始できません。')
+        print('         https://nodejs.org/ からインストールしてください。\n')
+
+    if missing_fatal:
+        print('  flask がまだ入っていないので画面を出せません。終了します。')
+        sys.exit(1)
+
+
+def check_dependencies():
+    """起動前に必要なものが揃っているか確かめる（ダイアログ版）。
+
+    .vbs から起動されるとコンソールが無いので、足りないことを
+    画面に出さないと「ダブルクリックしても無反応」に見えてしまう。
+    """
+    missing_fatal, missing_train = _scan_dependencies()
 
     if missing_fatal:
         _message_box(
@@ -134,7 +191,13 @@ def check_dependencies():
 
 APP_TITLE = '巨大数ポーカーAI学習'
 
-_MISSING = check_dependencies()
+# --console … .bat から呼ばれたとき。コンソールに日本語で案内し、
+#             足りない依存はその場で入れられるようにする。
+# それ以外 … .vbs から呼ばれたとき。コンソールが無いのでダイアログで知らせる。
+if '--console' in sys.argv:
+    check_dependencies_console()
+else:
+    check_dependencies()
 
 from dashboard_server import app, manager  # noqa: E402
 
@@ -267,10 +330,17 @@ def open_with_app_mode(url):
     if not browser:
         return False
 
+    # プロフィール置き場を作れなくても、窓を開くこと自体は諦めない。
+    # ここで例外を投げると「サーバーは動いているのに画面が出ない」という
+    # 一番わかりにくい壊れ方になる（実際にそうなった）。
     profile_dir = os.path.join(
         os.environ.get('LOCALAPPDATA', tempfile.gettempdir()),
-        '<AppName>', 'window_profile')
-    os.makedirs(profile_dir, exist_ok=True)
+        APP_DIR, 'window_profile')
+    try:
+        os.makedirs(profile_dir, exist_ok=True)
+    except OSError as e:
+        print(f'⚠️ プロフィール置き場を作れません: {e}')
+        return False
 
     cmd = [
         browser,
@@ -324,10 +394,17 @@ def main():
         sys.exit(1)
     print('  準備完了\n', flush=True)
 
-    if open_with_pywebview(url):
-        return
-    if open_with_app_mode(url):
-        return
+    # 窓の開き方は上から順に試す。途中で何が起きても、
+    # 最後は通常のブラウザで必ず開けるようにしておく。
+    # ここで例外を素通しすると「サーバーは動いているのに画面が出ない」
+    # という一番わかりにくい壊れ方になる。
+    for opener in (open_with_pywebview, open_with_app_mode):
+        try:
+            if opener(url):
+                return
+        except Exception as e:
+            print(f'⚠️ {opener.__name__} が失敗しました（次の方法を試します）: {e}')
+
     open_with_default_browser(url)
 
 
