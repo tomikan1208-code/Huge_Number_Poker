@@ -7,3 +7,11 @@
 # Windows のコンソールで実行するものは CRLF に固定する
 *.bat text eol=crlf
 *.ps1 text eol=crlf
+
+# .ps1 は UTF-8 BOM 付きで保存してある。BOM が無いと PowerShell 5.1 が
+# ANSI(cp932) として読み、日本語が化ける。BOM は中身なので git は触らないが、
+# エディタが勝手に落とさないよう注意すること。
+
+# .bat は ASCII のみ。日本語を書くと chcp 65001 と噛み合わず、
+# cmd がファイル位置を見失って行の途中から実行する。
+# 日本語のメッセージは tools/start.js と train/launcher.py にある。

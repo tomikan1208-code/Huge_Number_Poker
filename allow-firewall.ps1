@@ -1,4 +1,4 @@
-# allow-firewall.ps1
+﻿# allow-firewall.ps1
 # 巨大数ポーカーのサーバー（TCP 3000）を、同じLAN内の他端末から開けるようにする。
 #
 # Windows ファイアウォールの既定は「受信ブロック」で、既存の node.exe 許可規則は

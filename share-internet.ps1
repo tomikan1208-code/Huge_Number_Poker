@@ -1,4 +1,4 @@
-# share-internet.ps1
+﻿# share-internet.ps1
 # 巨大数ポーカーをインターネットに公開して、遠くの友達と対戦できるようにする。
 #
 # ngrok の代わりに Cloudflare Tunnel の「クイックトンネル」を使う。
