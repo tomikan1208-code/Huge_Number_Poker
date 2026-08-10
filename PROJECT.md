@@ -429,6 +429,11 @@ Windows では **`start.bat`** をダブルクリックすれば、ポート3000
 依存関係の確認 → ファイアウォール確認 → サーバー起動 → ブラウザ起動までを一括で行う。
 起動時に「この PC の URL」と「同じ LAN の他端末から使う URL」を表示する。
 
+**中身は `tools/start.js`（Node）にある。`start.bat` は ASCII だけの薄い入口。**
+日本語を含む UTF-8 の `.bat` は `chcp 65001` と噛み合わず、cmd がファイル位置を
+見失って行の途中から実行してしまうため（§13.5 の表を参照）。
+`.bat` に日本語のメッセージを書き戻さないこと。
+
 - この PC: http://localhost:3000
 - 同じ LAN の他端末: `http://<LANのIP>:3000/online`
 
@@ -893,6 +898,16 @@ AIは「**大きさを少し諦めて、確実に当てられる式を選ぶ**�
 | `.vbs` を UTF-8 で保存 | Windows Script Host が ANSI として読み、日本語コメントが化けて次の行のコードを巻き込む。**エラーも出ずに何も起動しない**。UTF-16LE(BOM付き) で保存する |
 | `.bat` に日本語（UTF-8）＋ `chcp 65001` | cmd.exe はファイル位置をバイト単位で追うので、コードページが変わるとマルチバイト文字で同期を失い、**行の途中から実行する**。`'...' is not recognized as an internal or external command` が延々出る。`AI学習コントロールパネル.bat` は **ASCII のみ**にし、日本語は `launcher.py --console` に寄せた |
 | テンプレートの `<AppName>` を置換し忘れ | Windows はファイル名に `<` `>` を使えないので `os.makedirs` が WinError 123 で落ちる。しかも**サーバーは起動済み**なので「動いているのに窓が出ない」になる。`APP_DIR` に集約した |
+| `.ps1` を BOM 無しの UTF-8 で保存 | PowerShell 5.1（Windows 標準）は BOM が無い `.ps1` を **ANSI(cp932) として読む**。日本語が化ける。UTF-8 BOM 付きで保存する（`share-internet.ps1` / `allow-firewall.ps1`）|
+
+この3つは**すべて「日本語をどこに置くか」の問題**で、ファイル形式ごとに正解が違う。
+
+| 形式 | 日本語を書けるか | 保存形式 |
+|---|---|---|
+| `.vbs` | 書ける | **UTF-16LE + BOM** |
+| `.ps1` | 書ける | **UTF-8 + BOM** |
+| `.bat` | **書かない** | ASCII のみ。日本語は `.js` / `.py` に逃がす |
+| `.js` / `.py` | 書ける | UTF-8（BOM不要）|
 | `pythonw.exe` で `print()` | コンソールが無いと `sys.stdout` が `None` になり、`print()` が例外で即死。画面には何も出ない。`launcher.py:_ensure_streams()` がログファイルへ逃がしている |
 | 空きポート判定に `SO_REUSEADDR` | Windows では使用中のポートにも bind できる（Linuxと逆）。二重起動する。`find_free_port()` では付けていない |
 

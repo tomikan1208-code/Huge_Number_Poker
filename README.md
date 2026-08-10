@@ -17,6 +17,7 @@ npm start
 → http://localhost:3000
 
 Windows なら `start.bat` をダブルクリックでも同じ（ポート掃除→依存確認→起動→ブラウザ）。
+中身は `tools/start.js`。
 
 | 遊び方 | 入口 |
 |---|---|
@@ -170,7 +171,9 @@ js/
   ai.js                       数式の全数列挙・申告生成・ヒューリスティック方策
   ai-policy.js                観測（特徴量）の定義と学習済み方策の推論
   ai-lab.js                   AIテスト場の制御（既存APIを呼ぶだけ）
-tools/calibrate-ai.js         正答率モデルを目標表に突き合わせる
+tools/
+  start.js                    start.bat の中身（ポート掃除・依存確認・起動・URL案内）
+  calibrate-ai.js             正答率モデルを目標表に突き合わせる
 train/
   env_server.js               並列環境サーバー（Node）
   train.py                    PPO 学習器（Python）
