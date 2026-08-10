@@ -1,42 +1,55 @@
 #!/usr/bin/env node
 /**
- * tools/calibrate-ai.js — 正答率モデルをアンカー表に突き合わせる
+ * tools/calibrate-ai.js — 正答率モデルを検査して、現在値を記録する
  *
  * ============================================================
- * これは何か
+ * このツールの役割が変わった経緯
  * ============================================================
- * js/ai-cognition.js の定数は、実測データではなく
- * 「紙とペンで手計算したとき、この人はこれくらい当てるはず」という
- * **設計者が決めた目標値（アンカー）** に合わせてある。
+ * 元はアンカー表（「大学生は 6^9 を5分で92%当てるはず」といった目標値）を置き、
+ * `--fit` で定数を座標降下させて**アンカーに合わせにいく**道具だった。
  *
- * 目標値そのものはこのファイルに書いてある。定数をいじったら必ずここを通す。
+ * これをやめた。理由は単純で、**アンカー自体が根拠のない当て推量だから**。
+ * 実測データではなく設計者の感覚で置いた数字に、モデルの定数を合わせにいくと
+ * 次のことが起きる。
  *
- *   node tools/calibrate-ai.js            アンカーとのズレを表示
- *   node tools/calibrate-ai.js --curves   時間ごとの正答率カーブも表示
- *   node tools/calibrate-ai.js --check    ズレが許容範囲を超えたら exit 1
- *   node tools/calibrate-ai.js --fit      定数を当て直して、貼り替える値を出す
+ *   1. アンカーが間違っていても、定数がそれを吸収して見た目は合う
+ *   2. 外部の根拠がある定数（九九1回 ≈ 1秒）まで押し出される
+ *   3. どの定数が「根拠のある値」でどれが「辻褄合わせ」なのか区別がつかなくなる
  *
- * ============================================================
- * --fit で「当てにいくもの」と「当てにいかないもの」
- * ============================================================
- * 当てるのは **構造側のグローバル定数だけ**。
- * 速度・ミス率・検算の発見率・暗記の範囲といった *人についての想定* は固定する。
- * これらまでフィッターに任せると、アンカーには合うが
- * 「競技者が 6^9 を30秒で筆算する」ような物理的にあり得ない値に張り付く。
- * 実際に一度そうなった。人の想定を変えたいときは AI_PROFILES を手で編集すること。
- *
- * 外部の根拠がある定数には狭い範囲しか許していない（下の FIT_KNOBS 参照）。
- *   MUL_TABLE      九九の想起 ≈ 1秒（Campbell & LeFevre 2001）→ そもそも当てない
- *   WRITE_PER_DIGIT 成人の書写は文章の書き写しで 40文字/分（1.5秒/文字）。
- *                   ただし筆算の数字列は語を読み解く必要がない分これより速いので、
- *                   50〜150文字/分（1.20〜0.40秒/文字）の範囲だけ許す
+ * 実際に起きた: 筆算中の九九を 0.80秒 に統一したら 6^9 の所要時間が
+ * 60秒 → 69.5秒 に伸びた。これは**そうあるべき変化**（手計算はもっと遅い、
+ * という判断で伸ばした）なのに、フィッターは書字速度を下限に張り付けて
+ * 元の正答率に戻そうとした。アンカーを守るために、根拠のある値を歪めていた。
  *
  * ============================================================
- * アンカーの立て方
+ * 今の役割
  * ============================================================
- * 「5分（300秒）与えて、紙とペンで検算までさせたときの正答率」を基準にする。
- * 手計算なので、時間さえあれば大抵は合う。差がつくのは主に
- * **短時間で間に合うか**のほうで、それは TIME_ANCHORS 側で見る。
+ * 2つに分けた。
+ *
+ *   REQUIREMENTS  守らないと**ゲームが壊れる**性質。定性的。破ったら exit 1
+ *                 例: 難易度が上のプロファイルほど当てる／時間を足せば当たるようになる
+ *                     (4+6)^9 は 6^9 よりはっきり速い（設計の看板）
+ *                 数字の帯は「明らかにおかしい値を弾く」ためだけの広さにしてある。
+ *                 狭めると結局アンカーと同じものになるので、狭めないこと。
+ *
+ *   SNAPSHOT      現在のモデルが出す値の**記録**。目標ではない。
+ *                 定数をいじったとき「意図した以外のどこが動いたか」を見るためのもの。
+ *                 差が出ても**それ自体は失敗ではない**。意図した変更なら
+ *                 `--snapshot` で貼り替える。
+ *
+ * つまり「合わせにいく」から「変化に気づく」に変えた。
+ *
+ *   node tools/calibrate-ai.js             要件の検査 ＋ 現在値の一覧
+ *   node tools/calibrate-ai.js --curves    時間ごとの正答率カーブも出す
+ *   node tools/calibrate-ai.js --check     要件を破ったら exit 1（CI 用）
+ *   node tools/calibrate-ai.js --snapshot  SNAPSHOT に貼る値を出力する
+ *
+ * ============================================================
+ * 定数を変えたいとき
+ * ============================================================
+ * **手で変える。** 変えた理由をその定数のコメントに書く。
+ * 根拠（文献・実測・設計上の意図）があるものと、無いものを混ぜない。
+ * 根拠が無い定数は「無い」と書いておけば、次に誰かが疑える。
  */
 
 const path = require('path');
@@ -44,70 +57,17 @@ const ROOT = path.join(__dirname, '..');
 const C = require(path.join(ROOT, 'js/ai-cognition.js'));
 const { FormulaEvaluator: FE } = require(path.join(ROOT, 'js/engine.js'));
 
-// ============================================================
-// 目標値
-// ============================================================
-
-/**
- * 300秒（5分）与えたときの正答率。
- *
- * 高校生 / 大学生 / 競技者 の3列が設計上の主目標。
- * 中学生 と トップ競技者 はそこからの外挿なので、ズレても優先度は低い。
- *
- * 階乗の行（9! と (8+3)!）は2つの変更が打ち消し合った結果ここに落ち着いている。
- *   factKnown を 1 に下げた（誰も階乗を暗記していない）  → 難しくなる
- *   効率的な手順（小さい因子から畳む）を入れた            → 易しくなる
- * 大学生の 7! は 2×3, 4×5, 6×7 → 6×20 → 120×42 と畳むので、
- * 順に掛けるより多桁の筆算が1回で済む。後者の効きのほうが大きかった。
- */
-const ANCHORS = {
-  //  式              novice casual skilled expert master
-  '9*8':            [0.99,  0.995, 0.995,  0.999, 0.999],
-  '6^6':            [0.75,  0.90,  0.95,   0.98,  0.99],
-  '9!':             [0.76,  0.88,  0.95,   0.98,  0.99],
-  '6^9':            [0.40,  0.80,  0.92,   0.97,  0.98],
-  '9^8':            [0.40,  0.75,  0.90,   0.97,  0.98],
-  '(8+3)!':         [0.38,  0.65,  0.86,   0.94,  0.97],
-  '(4+6)^9':        [0.95,  0.97,  0.98,   0.99,  0.995],
-};
-
-/**
- * 時間をかけたときの伸び方。[式, レベル, [[秒, 目標正答率], ...]]
- * 「30秒では無理／5分あれば解ける」という形になっているかを見る。
- * 手計算モデルではここが本体で、300秒の表だけ合っていても意味がない。
- */
-// 注: 300秒の時点で見直し回数は上限（MAX_RECHECKS）に達するので、
-//     600秒にしてもほとんど伸びない。「4回見直した後にさらに6回見直しても
-//     新しい誤りは見つからない」という飽和で、これはモデルの意図した挙動。
-//     初期の手書きアンカーは 600秒でまだ伸びる想定だったが、そちらを修正した。
-// 注: 6^9 / 大学生 の 60秒 は 0.35 → 0.22 に下げた。
-//     筆算中の九九を単発と同じ 0.80秒 に統一した結果、6^9 の所要時間が
-//     60秒 → 69.5秒 になり、**60秒は所要時間そのものを下回った**。
-//     間に合う確率が 34% しかない時点に「35%正解」を求めるのは、
-//     どう定数をいじっても満たせない要求になる。
-//     アンカーを甘くしたのではなく、九九の秒数のほうに根拠があるので
-//     そちらを優先して目標側を動かした（曲線の形は変えていない）。
-const TIME_ANCHORS = [
-  ['6^9', 'skilled', [[30, 0.03], [60, 0.22], [150, 0.85], [300, 0.92], [600, 0.93]]],
-  ['6^9', 'casual', [[30, 0.01], [60, 0.05], [150, 0.58], [300, 0.78], [600, 0.80]]],
-  ['9*8', 'casual', [[30, 0.95], [60, 0.98], [300, 0.995]]],
-];
-
-// アンカーは実測ではなく設計者の判断で置いた目標値なので、
-// これより細かい一致を求めても意味がない（偽の精度になる）。
-const TOLERANCE = 0.07;
-
-// ============================================================
-
 const LEVELS = C.AI_LEVEL_ORDER;
-const ANCHOR_TIME = 300;
 
 function analyze(formula, level) {
   const ev = FE.evaluate(formula);
   if (!ev.ok) throw new Error(`${formula}: ${ev.error}`);
   const profile = C.getProfile(level);
-  const a = C.analyzeFormula({ formula, ast: ev.ast, value: ev.value }, profile);
-  return { profile, analysis: a, value: ev.value };
+  return {
+    profile,
+    analysis: C.analyzeFormula({ formula, ast: ev.ast, value: ev.value }, profile),
+    value: ev.value,
+  };
 }
 
 function accuracy(formula, level, seconds) {
@@ -115,169 +75,341 @@ function accuracy(formula, level, seconds) {
   return C.accuracyUnderTime(analysis, seconds, profile);
 }
 
-function pad(s, n) { return String(s).padEnd(n); }
-function padL(s, n) { return String(s).padStart(n); }
-function fmt(x) { return (x * 100).toFixed(1); }
+function required(formula, level) {
+  return analyze(formula, level).analysis.requiredTime;
+}
 
-/** ズレに応じた印 */
-function mark(diff) {
-  const d = Math.abs(diff);
-  if (d <= TOLERANCE / 2) return ' ';
-  if (d <= TOLERANCE) return '.';
-  return diff > 0 ? '+' : '-';       // + は甘すぎ（当てすぎ）、- は厳しすぎ
+function acc(formula, level, seconds) {
+  return accuracy(formula, level, seconds).pCorrect;
 }
 
 // ============================================================
-// --fit : 構造側の定数だけを座標降下で当てる
+// 1. 要件 — 破ったらゲームが壊れる性質
 // ============================================================
+//
+// ここに書くのは「モデルがどんな値でも満たしていてほしい構造」だけ。
+// **具体的な正答率を目標として書かないこと。** それをやると結局アンカーになる。
 
-/** [定数名, 下限, 上限] — 人についての想定（AI_PROFILES）はここに入れないこと */
-const FIT_KNOBS = [
-  ['SYSTEMATIC_BASE', 0.03, 0.22],
-  ['SYSTEMATIC_SLOPE', 0.05, 1.60],
-  ['RECHECK_FACTOR', 0.25, 0.90],
-  ['ADD_PER_COLUMN', 0.15, 0.70],           // 部分積を足すときの1桁ぶん
-  // WRITE_PER_DIGIT はここに入れない。フィッターに渡すと下限(0.40 = 150文字/分)に
-  // 張り付いて、九九を遅くしたぶんを書字速度で埋め合わせてしまう。
-  // 境界に張り付く定数は「当たっている」のではなく「ズレを吸っている」。
-  // SETUP_BASE / SETUP_PER_CARD（式を組む操作、4枚でちょうど10秒）は
-  // 設計者が決めた値なので当てない
+const REQUIREMENTS = [
+  // ---- 単調性 ----------------------------------------------------------
+  {
+    name: '強いプロファイルほど当てる（同じ式・同じ時間）',
+    run() {
+      const bad = [];
+      for (const f of ['6^6', '6^9', '9!', '(8+3)!', '9^8']) {
+        for (let i = 1; i < LEVELS.length; i++) {
+          const lo = acc(f, LEVELS[i - 1], 300);
+          const hi = acc(f, LEVELS[i], 300);
+          if (hi < lo - 1e-9) bad.push(`${f}: ${LEVELS[i - 1]} ${(lo * 100).toFixed(1)}% > ${LEVELS[i]} ${(hi * 100).toFixed(1)}%`);
+        }
+      }
+      return bad;
+    },
+  },
+  {
+    name: '時間を足せば正答率は下がらない',
+    run() {
+      const bad = [];
+      const times = [10, 30, 60, 120, 300, 600];
+      for (const f of ['6^9', '9!', '(4+6)^9', '(8+3)!']) {
+        for (const lv of LEVELS) {
+          for (let i = 1; i < times.length; i++) {
+            const lo = acc(f, lv, times[i - 1]);
+            const hi = acc(f, lv, times[i]);
+            if (hi < lo - 1e-9) bad.push(`${f}/${lv}: ${times[i - 1]}秒 ${(lo * 100).toFixed(1)}% > ${times[i]}秒 ${(hi * 100).toFixed(1)}%`);
+          }
+        }
+      }
+      return bad;
+    },
+  },
+  {
+    name: '強いプロファイルほど速い（所要時間）',
+    run() {
+      const bad = [];
+      for (const f of ['6^9', '9!', '(8+3)!', '(5*6)^7']) {
+        for (let i = 1; i < LEVELS.length; i++) {
+          const slow = required(f, LEVELS[i - 1]);
+          const fast = required(f, LEVELS[i]);
+          if (fast > slow + 1e-9) bad.push(`${f}: ${LEVELS[i]} ${fast.toFixed(0)}秒 > ${LEVELS[i - 1]} ${slow.toFixed(0)}秒`);
+        }
+      }
+      return bad;
+    },
+  },
+
+  // ---- 設計の看板 ------------------------------------------------------
+  //
+  // 「値の大きさ」ではなく「計算過程」で難易度が決まる、というのがこのゲームの核。
+  // ここが崩れるとゲームそのものが別物になる。
+  {
+    name: '(4+6)^9 は 6^9 よりはっきり速い（値は大きいのに易しい）',
+    run() {
+      const bad = [];
+      for (const lv of LEVELS) {
+        const easy = required('(4+6)^9', lv);
+        const hard = required('6^9', lv);
+        if (hard < easy * 1.5) bad.push(`${lv}: (4+6)^9 ${easy.toFixed(0)}秒 に対し 6^9 が ${hard.toFixed(0)}秒 しかない`);
+      }
+      return bad;
+    },
+  },
+  {
+    name: '末尾0は計算を消さない: 30^7 は 10^7 より高い',
+    // 回帰テスト。かつて底の末尾が0なら「1のあとに0を並べるだけ」と誤認していて、
+    // (5*6)^7 = 30^7 が 10^7 と同じ値段になっていた。ゲーム内で作れる手なのでズルだった。
+    //
+    // 同じ指数どうしで比べる。10^7 は本当に「1のあとに0を7個」なので純粋な筆記だが、
+    // 30^7 はそこに 3^7 = 2187 が要る。誰にとっても 30^7 のほうが高いはず。
+    //
+    // ただし **差の大きさはプロファイルによって当然違う**。競技者は 3^7 を暗記している
+    // ので想起1回で済み、差は小さくなる。それは正しい挙動なので、暗記していない
+    // プロファイルにだけ大きな差を要求する。
+    run() {
+      const bad = [];
+      for (const lv of LEVELS) {
+        const ten = required('(4+6)^7', lv);
+        const thirty = required('(5*6)^7', lv);
+        if (thirty <= ten) {
+          bad.push(`${lv}: 30^7 ${thirty.toFixed(0)}秒 ≦ 10^7 ${ten.toFixed(0)}秒`);
+          continue;
+        }
+        const knows3to7 = (C.getProfile(lv).powerTable || {})[3] >= 7;
+        if (!knows3to7 && thirty < ten * 1.5) {
+          bad.push(`${lv}: 3^7 を暗記していないのに 30^7 ${thirty.toFixed(0)}秒 / 10^7 ${ten.toFixed(0)}秒 と差が小さい`);
+        }
+      }
+      return bad;
+    },
+  },
+  {
+    name: '短い式どうしが同じ秒数に潰れない（9*8 / 7! / 8! / 9!）',
+    // 階乗を暗記扱いにしていた頃、大学生だと全部10秒前後に並んで式の中身が見えなかった。
+    run() {
+      const bad = [];
+      for (const lv of LEVELS) {
+        const t = ['9*8', '7!', '8!', '9!'].map((f) => required(f, lv));
+        for (let i = 1; i < t.length; i++) {
+          if (t[i] < t[i - 1] * 1.1) bad.push(`${lv}: ${t.map((x) => x.toFixed(0)).join(' / ')} 秒`);
+        }
+      }
+      return bad;
+    },
+  },
+
+  // ---- 外部の根拠がある値 ----------------------------------------------
+  {
+    name: '九九1回は 0.80秒（Campbell & LeFevre 2001 の約1秒）',
+    run() {
+      return Math.abs(C.COG.MUL_TABLE - 0.80) < 1e-9
+        ? [] : [`MUL_TABLE = ${C.COG.MUL_TABLE}`];
+    },
+  },
+  {
+    name: '書字は 50〜150文字/分の帯に収まる',
+    // 成人の文章書き写しが約40文字/分。筆算の数字列は語を読み解かないぶん速いので上に取る。
+    run() {
+      const perMin = 60 / C.COG.WRITE_PER_DIGIT;
+      return (perMin >= 50 && perMin <= 150)
+        ? [] : [`WRITE_PER_DIGIT = ${C.COG.WRITE_PER_DIGIT} (${perMin.toFixed(0)}文字/分)`];
+    },
+  },
+  {
+    name: '4桁×4桁の筆算は 20〜45秒',
+    // 部分積4行×5桁＋合計8桁＝28文字を書く。書字だけで下限が決まり、
+    // 九九16回ぶんが上に乗る。この帯より外なら何かがおかしい。
+    // ※ 帯を狭めないこと。狭めるとアンカーと同じものになる。
+    run() {
+      const p = C.getProfile('skilled');
+      const t = 4 * (4 * C.COG.MUL_TABLE + 5 * C.COG.WRITE_PER_DIGIT)
+        + 8 * 3 * C.COG.ADD_PER_COLUMN + 8 * C.COG.WRITE_PER_DIGIT;
+      void p;
+      return (t >= 20 && t <= 45) ? [] : [`${t.toFixed(1)}秒`];
+    },
+  },
+
+  // ---- 時間とベットの連動が意味を持つか --------------------------------
+  //
+  // ポットを積むと計算時間が伸びる、という設計指示7が効いているかどうか。
+  // 「短時間では無理、時間があれば解ける」の幅が無いとベットが意味を失う。
+  {
+    name: '重い式は短時間では解けない（6^9 / 大学生 / 30秒 < 15%）',
+    run() {
+      const a = acc('6^9', 'skilled', 30);
+      return a < 0.15 ? [] : [`${(a * 100).toFixed(1)}%`];
+    },
+  },
+  {
+    name: '重い式も十分な時間があれば解ける（6^9 / 大学生 / 600秒 > 70%）',
+    run() {
+      const a = acc('6^9', 'skilled', 600);
+      return a > 0.70 ? [] : [`${(a * 100).toFixed(1)}%`];
+    },
+  },
+  {
+    name: '時間を積む価値がある（6^9 / 大学生 は 30秒→600秒 で 50pt 以上伸びる）',
+    run() {
+      const d = acc('6^9', 'skilled', 600) - acc('6^9', 'skilled', 30);
+      return d > 0.50 ? [] : [`${(d * 100).toFixed(1)}pt しか伸びない`];
+    },
+  },
+  {
+    name: '軽い式は短時間でも解ける（(4+6)^9 / 大学生 / 60秒 > 80%）',
+    run() {
+      const a = acc('(4+6)^9', 'skilled', 60);
+      return a > 0.80 ? [] : [`${(a * 100).toFixed(1)}%`];
+    },
+  },
 ];
 
-/** 承認済みの3列（高校生/大学生/競技者）を重く見る */
-const FIT_WEIGHT = { novice: 1, casual: 3, skilled: 3, expert: 3, master: 1 };
+// ============================================================
+// 2. スナップショット — 現在値の記録。目標ではない
+// ============================================================
+//
+// 差が出たら「意図した変更か」を自分に聞く。意図どおりなら --snapshot で貼り替える。
+// **ここの数字に合わせて定数をいじらないこと。** それをやると元の木阿弥になる。
 
-function fitLoss() {
-  C.clearAnalysisCache();
-  let s = 0;
-  for (const [formula, targets] of Object.entries(ANCHORS)) {
-    LEVELS.forEach((lv, i) => {
-      const d = accuracy(formula, lv, ANCHOR_TIME).pCorrect - targets[i];
-      s += FIT_WEIGHT[lv] * d * d;
-    });
-  }
-  for (const [formula, level, points] of TIME_ANCHORS) {
-    for (const [sec, want] of points) {
-      const d = accuracy(formula, level, sec).pCorrect - want;
-      s += 4 * d * d;
+const SNAPSHOT_FORMULAS = ['9*8', '6^6', '9!', '6^9', '9^8', '(8+3)!', '(4+6)^9', '(5*6)^7'];
+const SNAPSHOT_TIME = 300;
+
+/** 300秒での正答率（%）。--snapshot で再生成する */
+const SNAPSHOT_ACC = {
+  '9*8': [98.6, 99.3, 99.6, 99.8, 99.9],
+  '6^6': [71.8, 89.8, 96.7, 98.2, 99.0],
+  '9!': [78.6, 89.0, 95.7, 97.8, 99.2],
+  '6^9': [34.7, 73.2, 91.4, 95.3, 97.4],
+  '9^8': [43.9, 77.3, 94.6, 97.0, 98.4],
+  '(8+3)!': [34.3, 69.1, 88.7, 94.8, 97.2],
+  '(4+6)^9': [97.5, 98.5, 98.9, 99.2, 99.4],
+  '(5*6)^7': [66.4, 88.6, 96.0, 99.3, 99.4],
+};
+
+/** 所要時間（秒）。--snapshot で再生成する */
+const SNAPSHOT_TIME_S = {
+  '9*8': [12, 12, 12, 11, 11],
+  '6^6': [72, 46, 37, 31, 28],
+  '9!': [62, 53, 47, 36, 25],
+  '6^9': [157, 89, 69, 56, 48],
+  '9^8': [139, 79, 56, 46, 40],
+  '(8+3)!': [155, 105, 85, 63, 49],
+  '(4+6)^9': [28, 26, 25, 23, 22],
+  '(5*6)^7': [96, 59, 46, 24, 22],
+};
+
+/** ここを超える差だけ表示する。合わせにいくための閾値ではなく、目立たせるための閾値 */
+const DRIFT_NOTICE = 3.0;      // pt / 秒
+
+// ============================================================
+// 表示
+// ============================================================
+
+const pad = (s, n) => String(s).padEnd(n);
+const padL = (s, n) => String(s).padStart(n);
+const pct = (x) => (x * 100).toFixed(1);
+
+function runRequirements() {
+  console.log('=== 要件 ===\n');
+  let failed = 0;
+  for (const r of REQUIREMENTS) {
+    const bad = r.run();
+    if (bad.length === 0) {
+      console.log(`  OK   ${r.name}`);
+    } else {
+      failed++;
+      console.log(`  NG   ${r.name}`);
+      for (const b of bad.slice(0, 6)) console.log(`         ${b}`);
+      if (bad.length > 6) console.log(`         ...他 ${bad.length - 6} 件`);
     }
   }
-  return s;
+  console.log(`\n  ${REQUIREMENTS.length - failed} / ${REQUIREMENTS.length} 通過\n`);
+  return failed;
 }
 
-function runFit() {
-  let best = fitLoss();
-  console.log(`\n=== --fit: 構造側の定数を当て直す ===\n初期 loss ${best.toFixed(5)}`);
+function driftTable(title, unit, snapshot, get) {
+  console.log(`=== ${title} ===`);
+  console.log(`（括弧内は記録との差。${DRIFT_NOTICE}${unit} 未満は表示しない）\n`);
+  console.log(pad('式', 11) + LEVELS.map((lv) => padL(C.getProfile(lv).name, 18)).join(''));
 
-  for (let pass = 0; pass < 200; pass++) {
-    let improved = false;
-    for (const [key, lo, hi] of FIT_KNOBS) {
-      const cur = C.COG[key];
-      for (const mult of [0.96, 0.98, 1.02, 1.04]) {
-        const v = Math.min(hi, Math.max(lo, cur * mult));
-        if (v === cur) continue;
-        C.COG[key] = v;
-        const l = fitLoss();
-        if (l < best - 1e-10) { best = l; improved = true; break; }
-        C.COG[key] = cur;
+  let moved = 0;
+  for (const f of SNAPSHOT_FORMULAS) {
+    let line = pad(f, 11);
+    LEVELS.forEach((lv, i) => {
+      const got = get(f, lv);
+      const was = snapshot[f] ? snapshot[f][i] : null;
+      let cell = got.toFixed(1);
+      if (was !== null && Math.abs(got - was) >= DRIFT_NOTICE) {
+        const d = got - was;
+        cell += ` (${d > 0 ? '+' : ''}${d.toFixed(0)})`;
+        moved++;
       }
-    }
-    for (const v of [4, 5, 6, 8, 10, 12]) {          // MAX_RECHECKS は整数
-      const cur = C.COG.MAX_RECHECKS;
-      if (v === cur) continue;
-      C.COG.MAX_RECHECKS = v;
-      const l = fitLoss();
-      if (l < best - 1e-10) { best = l; improved = true; } else { C.COG.MAX_RECHECKS = cur; }
-    }
-    if (!improved) { console.log(`収束 (pass ${pass})`); break; }
+      line += padL(cell, 18);
+    });
+    console.log(line);
   }
+  console.log('');
+  return moved;
+}
 
-  console.log(`最終 loss ${best.toFixed(5)}\n`);
-  console.log('js/ai-cognition.js の COG に貼る値:');
-  for (const [key] of FIT_KNOBS) console.log(`  ${key}: ${C.COG[key].toFixed(3)},`);
-  console.log(`  MAX_RECHECKS: ${C.COG.MAX_RECHECKS},`);
-  console.log('\n※ 下の表はこの当て直しを反映したもの。実際に貼るまでソースは変わらない。');
+function runSnapshot() {
+  console.log('\n=== --snapshot: 貼り替える値 ===\n');
+  const dump = (name, get, digits) => {
+    console.log(`const ${name} = {`);
+    for (const f of SNAPSHOT_FORMULAS) {
+      const row = LEVELS.map((lv) => get(f, lv).toFixed(digits)).join(', ');
+      console.log(`  '${f}': [${row}],`);
+    }
+    console.log('};\n');
+  };
+  dump('SNAPSHOT_ACC', (f, lv) => acc(f, lv, SNAPSHOT_TIME) * 100, 1);
+  dump('SNAPSHOT_TIME_S', (f, lv) => required(f, lv), 0);
+  console.log('※ 意図した変更のときだけ貼り替えること。\n');
 }
 
 function main() {
   const args = process.argv.slice(2);
-  const showCurves = args.includes('--curves');
-  const checkMode = args.includes('--check');
 
-  if (args.includes('--fit')) runFit();
+  if (args.includes('--snapshot')) { runSnapshot(); return; }
 
-  let worst = 0, worstLabel = '', failures = 0;
+  const failed = runRequirements();
 
-  console.log(`\n=== ${ANCHOR_TIME}秒（5分）与えたときの正答率 ===`);
-  console.log('各セル: 実際 / 目標   印 + は当てすぎ、- は当てなさすぎ\n');
-  console.log(pad('式', 11) + LEVELS.map((lv) =>
-    padL(C.getProfile(lv).name, 16)).join(''));
+  const m1 = driftTable(`${SNAPSHOT_TIME}秒での正答率（%）`, 'pt',
+    SNAPSHOT_ACC, (f, lv) => acc(f, lv, SNAPSHOT_TIME) * 100);
+  const m2 = driftTable('所要時間（秒）', '秒',
+    SNAPSHOT_TIME_S, (f, lv) => required(f, lv));
 
-  for (const [formula, targets] of Object.entries(ANCHORS)) {
-    let line = pad(formula, 11);
-    LEVELS.forEach((lv, i) => {
-      const got = accuracy(formula, lv, ANCHOR_TIME).pCorrect;
-      const want = targets[i];
-      const diff = got - want;
-      if (Math.abs(diff) > worst) { worst = Math.abs(diff); worstLabel = `${formula} / ${lv}`; }
-      if (Math.abs(diff) > TOLERANCE) failures++;
-      line += padL(`${fmt(got)}/${fmt(want)}${mark(diff)}`, 16);
-    });
-    console.log(line);
-  }
-
-  console.log('\n=== 時間をかけたときの伸び方 ===\n');
-  for (const [formula, level, points] of TIME_ANCHORS) {
-    console.log(`${formula}  ${C.getProfile(level).name}`);
-    for (const [sec, want] of points) {
-      const acc = accuracy(formula, level, sec);
-      const diff = acc.pCorrect - want;
-      if (Math.abs(diff) > worst) { worst = Math.abs(diff); worstLabel = `${formula} / ${level} / ${sec}秒`; }
-      if (Math.abs(diff) > TOLERANCE) failures++;
-      console.log(`  ${padL(sec, 4)}秒  ${padL(fmt(acc.pCorrect), 6)}% / 目標 ${padL(fmt(want), 6)}% ${mark(diff)}` +
-        `   見直し ${acc.rechecks}回  間に合う ${acc.pFinish.toFixed(2)}  初回誤り ${fmt(acc.errFirst)}% → ${fmt(acc.errAfter)}%`);
-    }
-    console.log('');
-  }
-
-  console.log('=== 所要時間（秒）— 筆算として妥当か ===\n');
-  console.log(pad('式', 11) + LEVELS.map((lv) => padL(C.getProfile(lv).name, 16)).join(''));
-  for (const formula of Object.keys(ANCHORS)) {
-    let line = pad(formula, 11);
-    for (const lv of LEVELS) {
-      line += padL(analyze(formula, lv).analysis.requiredTime.toFixed(0), 16);
-    }
-    console.log(line);
-  }
-
-  console.log('\n=== 筆算1回の初回誤り率（検算前）===\n');
-  console.log(pad('', 7) + LEVELS.map((lv) => padL(C.getProfile(lv).name, 16)).join(''));
+  console.log('=== 筆算1回の初回誤り率（検算前）===\n');
+  console.log(pad('', 8) + LEVELS.map((lv) => padL(C.getProfile(lv).name, 18)).join(''));
   for (const n of [2, 3, 4, 5, 7]) {
-    let line = pad(`${n}桁×${n}桁`, 7);
+    let line = pad(`${n}桁×${n}桁`, 8);
     for (const lv of LEVELS) {
       const p = C.getProfile(lv);
-      line += padL(`${fmt(1 - Math.pow(1 - p.slipRate, n * n + n))}%`, 16);
+      line += padL(`${pct(1 - Math.pow(1 - p.slipRate, n * n + n))}%`, 18);
     }
     console.log(line);
   }
+  console.log('');
 
-  if (showCurves) {
-    console.log('\n=== 正答率カーブ ===\n');
-    for (const formula of Object.keys(ANCHORS)) {
-      console.log(formula);
+  if (args.includes('--curves')) {
+    console.log('=== 正答率カーブ ===\n');
+    const times = [10, 30, 60, 120, 300, 600];
+    for (const f of SNAPSHOT_FORMULAS) {
+      console.log(f);
       for (const lv of LEVELS) {
-        const row = [10, 30, 60, 120, 300, 600]
-          .map((s) => padL(`${fmt(accuracy(formula, lv, s).pCorrect)}%`, 8)).join('');
-        console.log(`  ${pad(C.getProfile(lv).name, 14)}${row}`);
+        console.log(`  ${pad(C.getProfile(lv).name, 14)}` +
+          times.map((s) => padL(`${pct(acc(f, lv, s))}%`, 9)).join(''));
       }
-      console.log(`  ${pad('', 14)}${[10, 30, 60, 120, 300, 600].map((s) => padL(`${s}s`, 8)).join('')}\n`);
+      console.log(`  ${pad('', 14)}${times.map((s) => padL(`${s}s`, 9)).join('')}\n`);
     }
   }
 
-  console.log(`\n最大ズレ ${fmt(worst)}pt（${worstLabel}） / 許容超え ${failures} 箇所\n`);
+  if (m1 + m2 > 0) {
+    console.log(`記録と ${DRIFT_NOTICE} 以上ちがうセルが ${m1 + m2} 個ある。`);
+    console.log('意図した変更なら --snapshot で貼り替える。');
+    console.log('意図していないなら、直近でいじった定数を疑う。\n');
+  }
 
-  if (checkMode && failures > 0) {
-    console.error(`アンカーから ${TOLERANCE * 100}pt 以上ずれている箇所が ${failures} 個ある`);
+  if (failed > 0) {
+    console.error(`要件を ${failed} 件破っている`);
     process.exit(1);
   }
 }
