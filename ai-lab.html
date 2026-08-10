@@ -289,6 +289,34 @@
         <div id="hand-error" class="lab-error"></div>
       </div>
 
+      <div class="lab-panel">
+        <h2>仮想の卓
+          <span class="lab-hint">この状況を作って「降りるか / いくら賭けるか」を見る</span>
+        </h2>
+        <div class="lab-form">
+          <div class="lab-field">
+            <label for="table-mychips">自分のチップ</label>
+            <input id="table-mychips" type="number" min="1" step="10" value="1000">
+          </div>
+          <div class="lab-field">
+            <label for="table-oppchips">相手1人のチップ</label>
+            <input id="table-oppchips" type="number" min="1" step="10" value="1000">
+          </div>
+          <div class="lab-field">
+            <label for="table-pot">今のポット</label>
+            <input id="table-pot" type="number" min="0" step="10" value="60">
+          </div>
+          <div class="lab-field">
+            <label for="table-tocall">コールに要る額（0ならチェック）</label>
+            <input id="table-tocall" type="number" min="0" step="10" value="0">
+          </div>
+        </div>
+        <p class="lab-inline-note">
+          対戦相手の人数と難易度は上の「条件」を使う。計算時間はポットから決まるので、
+          上の「計算時間」ではなくここのポットとベット額で決まる（設計指示7）。
+        </p>
+      </div>
+
       <div id="hand-results" class="hidden">
 
         <div class="lab-panel">
@@ -316,6 +344,79 @@
             学習済みのニューラル方策はゲームの状態（ポット・チップ・席順）を必要とするため、
             このラボではヒューリスティック方策だけを見ている。
           </p>
+        </div>
+
+        <div class="lab-panel">
+          <h2>この卓でどうするか</h2>
+          <div class="lab-rate-row">
+            <div class="lab-rate">
+              <div class="lab-rate-label">ベット判断</div>
+              <div id="hand-bet-action" class="lab-rate-value">–</div>
+              <div id="hand-bet-sub" class="lab-rate-sub"></div>
+            </div>
+            <div class="lab-rate">
+              <div class="lab-rate-label">降りるより得か</div>
+              <div id="hand-bet-margin" class="lab-rate-value">–</div>
+              <div id="hand-bet-margin-sub" class="lab-rate-sub"></div>
+            </div>
+            <div class="lab-rate">
+              <div class="lab-rate-label">作れる式の評価</div>
+              <div id="hand-weak-reason" class="lab-rate-value" style="font-size:1.5rem;">–</div>
+              <div id="hand-weak-sub" class="lab-rate-sub"></div>
+            </div>
+          </div>
+
+          <p id="hand-decide-reason" class="lab-reason"></p>
+
+          <div id="hand-fold-plan" class="lab-fold-plan hidden">
+            <strong>降りるが、続けていたら作る予定だった式:</strong>
+            <span id="hand-fold-formula" class="lab-fold-formula"></span>
+            <span id="hand-fold-detail" class="lab-muted"></span>
+          </div>
+
+          <p class="lab-subhead">使う予定のカード</p>
+          <div id="hand-plan-cards" class="lab-hand lab-plan-cards"></div>
+          <p id="hand-plan-note" class="lab-muted"></p>
+
+          <p class="lab-subhead">ベット額ごとの中身
+            <span class="lab-hint">■ の行が選ばれた額。score が「降りる」を下回ると降りる</span>
+          </p>
+          <p class="lab-inline-note" style="margin-top:0;">
+            額ごとに計算時間が変わるので、<strong>選ぶ式も変わる</strong>。
+            上の「AIが選ぶ式」は「条件」の計算時間で見たものなので、ここと一致しないことがある。
+          </p>
+          <div class="lab-table-wrap">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>選択肢</th>
+                  <th>出す額</th>
+                  <th>計算時間</th>
+                  <th>相手が降りる</th>
+                  <th>そのとき選ぶ式</th>
+                  <th>正答率</th>
+                  <th>beat</th>
+                  <th>勝率</th>
+                  <th>score</th>
+                </tr>
+              </thead>
+              <tbody id="hand-bet-table"></tbody>
+            </table>
+          </div>
+          <p class="lab-inline-note">
+            score は <strong>ICM（順位の期待値）</strong>。チップの増減ではない。
+            全部失えばトーナメントが終わるので、同じ枚数でも負ける側の損が大きく出る。
+            「降りる」の score は <span id="hand-bet-foldscore" class="lab-mono">–</span>。
+          </p>
+        </div>
+
+        <div class="lab-panel">
+          <h2>どのカードを入れ替えるか
+            <span class="lab-hint">交換フェーズで AI が捨てる札</span>
+          </h2>
+          <div id="hand-exchange-cards" class="lab-hand lab-plan-cards"></div>
+          <p id="hand-exchange-note" class="lab-muted"></p>
+          <p id="hand-exchange-mismatch" class="lab-reason lab-reason-warn hidden"></p>
         </div>
 
         <div class="lab-panel">

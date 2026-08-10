@@ -613,6 +613,59 @@ html { background: var(--bg-primary); }
   padding: 0.5rem 0;
 }
 
+/* ---------- 仮想の卓での判断 ---------- */
+
+.lab-reason {
+  margin: 0.9rem 0 0;
+  padding: 0.6rem 0.85rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  line-height: 1.75;
+}
+
+
+/* 使う札 / 捨てる札。手札の並びは変えずに、見た目だけで区別する
+   （並べ替えるとどのカードが動いたのか追えなくなる）*/
+.lab-plan-cards .card {
+  cursor: default;
+}
+.lab-plan-cards .card:hover {
+  box-shadow: var(--shadow-card);
+}
+
+.lab-plan-cards .card-keep {
+  box-shadow: 0 0 0 2px var(--success), var(--shadow-card);
+}
+
+.lab-plan-cards .card-discard {
+  opacity: 0.35;
+  filter: grayscale(0.8);
+}
+
+.lab-fold-plan {
+  margin: 0.8rem 0;
+  padding: 0.7rem 0.9rem;
+  border-left: 3px solid var(--danger);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border-radius: 0 6px 6px 0;
+  font-size: 0.9rem;
+  line-height: 1.7;
+}
+
+.lab-fold-formula {
+  font-family: var(--font-mono);
+  font-size: 1.15rem;
+  margin: 0 0.4rem;
+}
+
+.lab-reason-warn {
+  border-left: 3px solid var(--warning);
+  background: rgba(255, 176, 32, 0.08);
+}
+
+.lab-mono { font-family: var(--font-mono); }
+
 /* ---------- 小物 ---------- */
 
 .lab-muted { color: var(--text-muted); font-size: 0.8rem; }
