@@ -272,8 +272,34 @@
           <span class="my-chips" id="my-chips">💰 1000</span>
         </div>
 
-        <!-- 手札 -->
-        <div class="hand-area" id="hand-area"></div>
+        <!-- 3層構造: プレビュー（上）/ D&D（中）/ 手札（下） -->
+        <div class="main-workspace hidden" id="main-workspace">
+          <!-- 上段: 数式プレビュー -->
+          <div class="preview-area">
+            <div class="preview-label">Formula Preview</div>
+            <div class="formula-preview" id="formula-preview">数式を組み立てるとここに表示されます</div>
+          </div>
+
+          <!-- 中段: D&D配置エリア（中身は builder.js が生成する） -->
+          <div class="builder-area" id="builder-area"></div>
+        </div>
+
+        <!-- 手札（左）＋ 括弧カード（カード1枚ぶんあけて右・枚数制限の対象外） -->
+        <div class="hand-row" id="hand-row">
+          <div class="hand-area" id="hand-area"></div>
+          <div class="paren-tools hidden" id="paren-tools">
+            <div class="paren-card" data-paren="(" draggable="true" tabindex="0"
+                 title="開き括弧（何枚でも使える）" aria-label="開き括弧。枚数制限なし">
+              <span class="card-face">(</span>
+              <span class="paren-infinity" aria-hidden="true">∞</span>
+            </div>
+            <div class="paren-card" data-paren=")" draggable="true" tabindex="0"
+                 title="閉じ括弧（何枚でも使える）" aria-label="閉じ括弧。枚数制限なし">
+              <span class="card-face">)</span>
+              <span class="paren-infinity" aria-hidden="true">∞</span>
+            </div>
+          </div>
+        </div>
 
         <!-- アクションバー（ベット） -->
         <div class="action-bar hidden" id="betting-actions">
@@ -291,24 +317,8 @@
           <button class="exchange-btn" id="btn-exchange">交換する</button>
         </div>
 
-        <!-- 3層構造: プレビュー（上）/ D&D（中）/ 手札（下） -->
-        <div class="main-workspace hidden" id="main-workspace">
-          <!-- 上段: 数式プレビュー -->
-          <div class="preview-area">
-            <div class="preview-label">Formula Preview</div>
-            <div class="formula-preview" id="formula-preview">数式を組み立てるとここに表示されます</div>
-          </div>
-
-          <!-- 中段: D&D配置エリア（中身は builder.js が生成する） -->
-          <div class="builder-area" id="builder-area"></div>
-
-          <!-- 括弧カード（常設ツール・枚数制限の対象外） -->
-          <div class="paren-tools">
-            <div class="paren-card" data-paren="(" draggable="true">(</div>
-            <div class="paren-card" data-paren=")" draggable="true">)</div>
-          </div>
-
-          <!-- 結果入力 -->
+        <!-- 結果入力 -->
+        <div class="submit-area hidden" id="submit-area">
           <div class="declaration-hint" id="declaration-hint">カードを並べると、答えの入力形式がここに表示されます</div>
           <div class="result-input-row" id="result-input-row">
             <input type="text" class="result-input" id="result-input" placeholder="答えを入力（例: 125 / 1234桁 / 10^10^30）">

@@ -33,6 +33,11 @@
   --card-paren: #4a5568;
   --card-paren-light: #5f6f85;
 
+  /* カードの寸法（手札と括弧の間隔をカード1枚ぶんに合わせるのに使う） */
+  --card-w: 76px;
+  --card-h: 106px;
+  --hand-gap: 0.6rem;
+
   --gold: #f5c842;
   --shadow-card: 0 6px 18px rgba(0, 0, 0, 0.45);
   --shadow-card-hover: 0 10px 28px rgba(0, 0, 0, 0.55);
@@ -585,6 +590,14 @@ body {
   min-height: 0;
 }
 
+/* 結果入力（手札の行より下） */
+.submit-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
 /* --- 上段: 数式プレビュー --- */
 .preview-area {
   text-align: center;
@@ -725,18 +738,35 @@ body {
   transform: scale(0.95);
 }
 
-/* 括弧ツール（常設） */
+/* --- 手札の行: 手札（左） ＋ 括弧ツール（カード1枚ぶんあけて右） --- */
+.hand-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 手札の並びからカード1枚ぶん（＋前後の隙間）あける */
+  column-gap: calc(var(--card-w) + var(--hand-gap) * 2);
+  row-gap: 0.5rem;   /* 幅が足りず括弧が折り返したときの縦の間隔 */
+  flex-wrap: wrap;
+  margin: 0.6rem 0;
+}
+
+.hand-row .hand-area {
+  margin-bottom: 0;
+  flex-wrap: nowrap;
+}
+
+/* 括弧ツール（常設・枚数制限なし） */
 .paren-tools {
   display: flex;
-  gap: 0.5rem;
+  gap: var(--hand-gap);
   justify-content: center;
   align-items: center;
-  padding: 0.5rem 0;
+  padding: 0;
 }
 
 .paren-tools .paren-card {
-  width: 76px;
-  height: 106px;
+  width: var(--card-w);
+  height: var(--card-h);
   border-radius: 10px;
   background: linear-gradient(145deg, var(--card-paren-light), var(--card-paren));
   color: white;
@@ -772,6 +802,33 @@ body {
   cursor: grabbing;
 }
 
+.paren-tools .paren-card:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 3px;
+}
+
+.paren-tools .paren-card .card-face {
+  line-height: 1;
+}
+
+/* 「何枚でも使える」ことを示す無限マーク */
+.paren-tools .paren-card .paren-infinity {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  min-width: 22px;
+  padding: 1px 4px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  font-family: var(--font-main);
+  font-size: 1rem;
+  font-weight: bold;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--gold);
+  pointer-events: none;
+}
+
 /* --- 下段: 手札 --- */
 .my-area {
   background: var(--bg-secondary);
@@ -800,7 +857,7 @@ body {
 
 .hand-area {
   display: flex;
-  gap: 0.6rem;
+  gap: var(--hand-gap);
   justify-content: center;
   flex-wrap: wrap;
   margin-bottom: 0.5rem;
@@ -813,8 +870,8 @@ body {
    ============================================================ */
 
 .card {
-  width: 76px;
-  height: 106px;
+  width: var(--card-w);
+  height: var(--card-h);
   border-radius: 10px;
   background: var(--bg-card);
   color: #2a2a3a;
@@ -1604,9 +1661,13 @@ body {
    ============================================================ */
 
 @media (max-width: 768px) {
+  :root {
+    --card-w: 60px;
+    --card-h: 84px;
+    --hand-gap: 0.35rem;
+  }
+
   .card {
-    width: 60px;
-    height: 84px;
     font-size: 1.4rem;
   }
 
@@ -1614,6 +1675,15 @@ body {
     width: 48px;
     height: 72px;
     font-size: 1.6rem;
+  }
+
+  .paren-tools .paren-card {
+    font-size: 1.5rem;
+  }
+
+  .hand-area {
+    gap: var(--hand-gap);
+    min-height: 90px;
   }
 
   .player-seat {
@@ -1643,6 +1713,20 @@ body {
   .preview-area .formula-preview {
     font-size: 1.5rem;
   }
+}
+
+/* 7枚＋1枚ぶんの隙間＋括弧2枚が入りきらない幅では、カードを一段小さくする */
+@media (max-width: 520px) {
+  :root {
+    --card-w: 44px;
+    --card-h: 62px;
+    --hand-gap: 0.25rem;
+  }
+
+  .card { font-size: 1.1rem; }
+  .paren-tools .paren-card { font-size: 1.2rem; }
+  .paren-tools .paren-card .paren-infinity { font-size: 0.7rem; top: 4px; right: 5px; }
+  .hand-area { min-height: 70px; }
 }
 /* ============================================================
    追加スタイル（巨大数の申告UI / 数式組版 / アクセシビリティ）

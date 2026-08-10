@@ -123,20 +123,6 @@
 
           <!-- 中段: D&D配置エリア（中身は builder.js が生成する） -->
           <div class="builder-area" id="online-builder-area"></div>
-
-          <!-- 括弧カード（常設ツール・枚数制限の対象外） -->
-          <div class="paren-tools">
-            <div class="paren-card" data-paren="(" draggable="true">(</div>
-            <div class="paren-card" data-paren=")" draggable="true">)</div>
-          </div>
-
-          <!-- 結果入力 -->
-          <div class="declaration-hint" id="online-declaration-hint">カードを並べると、答えの入力形式がここに表示されます</div>
-          <div class="result-input-row" id="online-result-input-row">
-            <input type="text" class="result-input" id="online-result-input" placeholder="答えを入力（例: 125 / 1234桁 / 10^10^30）">
-            <button class="submit-btn" id="online-btn-submit">提出</button>
-          </div>
-          <div class="declaration-preview" id="online-declaration-preview"></div>
         </div>
 
         <!-- 自分の領域（一番下） -->
@@ -146,7 +132,22 @@
             <span class="my-chips" id="online-my-chips">💰 1000</span>
           </div>
 
-          <div class="hand-area" id="online-hand-area"></div>
+          <!-- 手札（左）＋ 括弧カード（カード1枚ぶんあけて右・枚数制限の対象外） -->
+          <div class="hand-row" id="online-hand-row">
+            <div class="hand-area" id="online-hand-area"></div>
+            <div class="paren-tools hidden" id="online-paren-tools">
+              <div class="paren-card" data-paren="(" draggable="true" tabindex="0"
+                   title="開き括弧（何枚でも使える）" aria-label="開き括弧。枚数制限なし">
+                <span class="card-face">(</span>
+                <span class="paren-infinity" aria-hidden="true">∞</span>
+              </div>
+              <div class="paren-card" data-paren=")" draggable="true" tabindex="0"
+                   title="閉じ括弧（何枚でも使える）" aria-label="閉じ括弧。枚数制限なし">
+                <span class="card-face">)</span>
+                <span class="paren-infinity" aria-hidden="true">∞</span>
+              </div>
+            </div>
+          </div>
 
           <div class="action-bar hidden" id="online-betting-actions">
             <button class="action-btn fold" id="online-btn-fold">フォールド</button>
@@ -160,6 +161,16 @@
           <div class="exchange-area hidden" id="online-exchange-area">
             <p class="exchange-hint">交換したいカードをクリックして選択し、「交換する」を押してください</p>
             <button class="exchange-btn" id="online-btn-exchange">交換する</button>
+          </div>
+
+          <!-- 結果入力 -->
+          <div class="submit-area hidden" id="online-submit-area">
+            <div class="declaration-hint" id="online-declaration-hint">カードを並べると、答えの入力形式がここに表示されます</div>
+            <div class="result-input-row" id="online-result-input-row">
+              <input type="text" class="result-input" id="online-result-input" placeholder="答えを入力（例: 125 / 1234桁 / 10^10^30）">
+              <button class="submit-btn" id="online-btn-submit">提出</button>
+            </div>
+            <div class="declaration-preview" id="online-declaration-preview"></div>
           </div>
         </div>
 

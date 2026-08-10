@@ -62,16 +62,41 @@
       },
     });
 
+    // 括弧カード（常設ツール）: ドラッグでもクリックでも置ける
     document.querySelectorAll('.paren-tools .paren-card').forEach(el => {
+      if (el._hnpParenBound) return;
+      el._hnpParenBound = true;
+
+      const makeCard = () => ({ type: 'paren', value: el.dataset.paren });
+
       el.draggable = true;
       el.addEventListener('dragstart', (e) => {
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('application/json', JSON.stringify({
           type: 'hand',
-          card: { type: 'paren', value: el.dataset.paren },
+          card: makeCard(),
         }));
       });
+      el.addEventListener('dragend', () => {
+        if (builder) builder.dragEndedAt = Date.now();
+      });
+
+      const add = () => {
+        if (!builder || builder._recentlyDragged()) return;
+        builder.appendCard(makeCard());
+      };
+      el.addEventListener('click', add);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); add(); }
+      });
     });
+  }
+
+  /** 数式構築まわり（プレビュー・配置エリア・括弧・結果入力）の表示切替 */
+  function setWorkspaceVisible(visible) {
+    $('online-main-workspace').classList.toggle('hidden', !visible);
+    $('online-paren-tools').classList.toggle('hidden', !visible);
+    $('online-submit-area').classList.toggle('hidden', !visible);
   }
 
   // ============================================================
@@ -204,7 +229,7 @@
 
     $('online-betting-actions').classList.toggle('hidden', !isBetting || isSpectator);
     $('online-exchange-area').classList.toggle('hidden', !isExchange || isSpectator);
-    $('online-main-workspace').classList.toggle('hidden', !isCalculation || isSpectator);
+    setWorkspaceVisible(isCalculation && !isSpectator);
 
     if (isCalculation && !isSpectator) {
       renderFormulaArea();

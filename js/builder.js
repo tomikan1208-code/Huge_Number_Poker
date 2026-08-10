@@ -80,6 +80,7 @@ class FormulaBuilder {
     this.usedCardIds = new Set();
     this.insertIndex = null;      // ドラッグ中の挿入位置
     this.draggingInstanceId = null;
+    this.dragEndedAt = 0;         // ドラッグ直後の click を無視するため
 
     this._initDom();
   }
@@ -99,7 +100,7 @@ class FormulaBuilder {
     this.builderArea.innerHTML = '';
     this.emptyEl = document.createElement('div');
     this.emptyEl.className = 'builder-empty';
-    this.emptyEl.textContent = 'ここにカードをドラッグ＆ドロップして数式を作る';
+    this.emptyEl.textContent = '手札をクリック（またはドラッグ＆ドロップ）して数式を作る';
 
     this.sequenceEl = document.createElement('div');
     this.sequenceEl.className = 'builder-sequence';
@@ -177,7 +178,7 @@ class FormulaBuilder {
       if (isUsed) el.classList.add('used');
 
       el.draggable = !isUsed && !locked;
-      el.setAttribute('aria-disabled', String(isUsed || locked));
+      el.setAttribute('aria-disabled', String(locked));
 
       el.addEventListener('dragstart', (e) => {
         if (locked || isUsed) { e.preventDefault(); return; }
@@ -187,9 +188,25 @@ class FormulaBuilder {
       });
       el.addEventListener('dragend', () => {
         el.classList.remove('dragging');
+        this.dragEndedAt = Date.now();
         this._clearInsertIndicator();
         this.builderArea.classList.remove('drag-over');
       });
+
+      // クリックだけでも置ける／戻せる（置いてある札をもう一度押すと手札に戻る）
+      if (!locked) {
+        el.tabIndex = 0;
+        el.title = isUsed ? 'クリックで手札に戻す' : 'クリックで数式に置く';
+        const toggle = () => {
+          if (this._recentlyDragged()) return;
+          if (this.usedCardIds.has(card.id)) this._removeCardById(card.id);
+          else this.appendCard(card);
+        };
+        el.addEventListener('click', toggle);
+        el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+        });
+      }
 
       this.handArea.appendChild(el);
     });
@@ -226,9 +243,24 @@ class FormulaBuilder {
       el.addEventListener('dragend', () => {
         el.classList.remove('dragging');
         this.draggingInstanceId = null;
+        this.dragEndedAt = Date.now();
         this._clearInsertIndicator();
         this.builderArea.classList.remove('drag-over');
       });
+
+      // 並べた札はクリックで取り除ける（AIテスト場と同じ操作）
+      if (!this.isLocked()) {
+        el.tabIndex = 0;
+        el.title = 'クリックで取り除く';
+        const remove = () => {
+          if (this._recentlyDragged()) return;
+          this._removeInstance(item.instanceId);
+        };
+        el.addEventListener('click', remove);
+        el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); remove(); }
+        });
+      }
 
       this.sequenceEl.appendChild(el);
     });
@@ -346,13 +378,44 @@ class FormulaBuilder {
   _handleReturnToHand(e) {
     const data = this._readDragData(e);
     if (!data || data.type !== 'placed') return;
+    this._removeInstance(data.instanceId);
+  }
 
-    const idx = this.sequence.findIndex(i => i.instanceId === data.instanceId);
+  // ============================================================
+  // クリック操作（ドラッグ＆ドロップと同じことをクリックだけでやる）
+  // ============================================================
+
+  /** ドラッグ直後に飛んでくる click を無視する */
+  _recentlyDragged() {
+    return Date.now() - this.dragEndedAt < 250;
+  }
+
+  /** 末尾に1枚足す（括弧ツール・手札クリック共用） */
+  appendCard(card) {
+    if (this.isLocked()) return;
+    this._insertCard(card, this.sequence.length);
+  }
+
+  /** 並べた札を1枚取り除く */
+  _removeInstance(instanceId) {
+    if (this.isLocked()) return;
+    const idx = this.sequence.findIndex(i => i.instanceId === instanceId);
     if (idx === -1) return;
 
     const [item] = this.sequence.splice(idx, 1);
     if (item.card.type !== 'paren') this.usedCardIds.delete(item.card.id);
     this._commit();
+  }
+
+  /** 手札カードIDから、置いてある札を取り除く（最後に置いたものを優先） */
+  _removeCardById(cardId) {
+    for (let i = this.sequence.length - 1; i >= 0; i--) {
+      const c = this.sequence[i].card;
+      if (c.type !== 'paren' && c.id === cardId) {
+        this._removeInstance(this.sequence[i].instanceId);
+        return;
+      }
+    }
   }
 
   /** 括弧を除いた使用枚数 */

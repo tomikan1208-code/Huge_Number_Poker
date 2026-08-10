@@ -307,7 +307,7 @@ function renderMyArea() {
 
   $('betting-actions').classList.toggle('hidden', !isBetting);
   $('exchange-area').classList.toggle('hidden', !isExchange);
-  $('main-workspace').classList.toggle('hidden', !isCalculation);
+  setWorkspaceVisible(isCalculation);
 
   if (isCalculation) {
     renderFormulaArea();
@@ -317,6 +317,16 @@ function renderMyArea() {
     if (isBetting) renderBettingActions();
     if (isExchange) renderExchangeArea();
   }
+}
+
+/**
+ * 数式構築まわり（プレビュー・配置エリア・括弧カード・結果入力）の表示を切り替える。
+ * 手札は常に同じ場所にあるので、ここでは触らない。
+ */
+function setWorkspaceVisible(visible) {
+  $('main-workspace').classList.toggle('hidden', !visible);
+  $('paren-tools').classList.toggle('hidden', !visible);
+  $('submit-area').classList.toggle('hidden', !visible);
 }
 
 /** 計算フェーズ以外の手札表示 */
@@ -645,15 +655,36 @@ function initBuilder() {
     },
   });
 
-  // 括弧カード（常設ツール）
+  initParenTools();
+}
+
+/** 括弧カード（常設ツール）: ドラッグでもクリックでも置ける */
+function initParenTools() {
   document.querySelectorAll('.paren-tools .paren-card').forEach(el => {
+    if (el._hnpParenBound) return;
+    el._hnpParenBound = true;
+
+    const makeCard = () => ({ type: 'paren', value: el.dataset.paren });
+
     el.draggable = true;
     el.addEventListener('dragstart', (e) => {
       e.dataTransfer.effectAllowed = 'move';
       e.dataTransfer.setData('application/json', JSON.stringify({
         type: 'hand',
-        card: { type: 'paren', value: el.dataset.paren },
+        card: makeCard(),
       }));
+    });
+    el.addEventListener('dragend', () => {
+      if (builder) builder.dragEndedAt = Date.now();
+    });
+
+    const add = () => {
+      if (!builder || builder._recentlyDragged()) return;
+      builder.appendCard(makeCard());
+    };
+    el.addEventListener('click', add);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); add(); }
     });
   });
 }
@@ -1007,7 +1038,7 @@ function renderSoloMode() {
 
   $('betting-actions').classList.add('hidden');
   $('exchange-area').classList.add('hidden');
-  $('main-workspace').classList.remove('hidden');
+  setWorkspaceVisible(true);
   $('result-input-row').classList.remove('auto-calc');
   $('result-input').classList.remove('hidden');
   $('declaration-hint').classList.remove('hidden');
