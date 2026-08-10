@@ -64,6 +64,12 @@ MODES = {
 #
 # key はログのキー、fmt は 'rate'（0〜1を%表示）/ 'float' / 'int'
 METRICS = [
+    # 勝ち残り（主指標）。3人卓なら 0.333 が互角の線。
+    {'key': 'champ_vs_best',    'label': '優勝率（vs 過去最強）',  'fmt': 'rate'},
+    {'key': 'champ_vs_random',  'label': '優勝率（vs ランダム）',  'fmt': 'rate'},
+    {'key': 'place_vs_best',    'label': '平均順位（vs 過去最強）', 'fmt': 'float'},
+    {'key': 'hands_per_tournament', 'label': 'トーナメントの長さ（ハンド）', 'fmt': 'float'},
+    # チップの稼ぎ（従属指標。長く残る席ほどハンド数が増える点に注意）
     {'key': 'bb_per_hand',      'label': 'bb/hand（vs 過去最強）', 'fmt': 'float'},
     {'key': 'bb_vs_random',     'label': 'bb/hand（vs ランダム）', 'fmt': 'float'},
     {'key': 'win_vs_best',      'label': 'vs Best ハンド勝率',     'fmt': 'rate'},
