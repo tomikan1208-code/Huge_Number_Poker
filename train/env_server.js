@@ -33,7 +33,7 @@
  *
  * 1エピソード = 1ハンド、1席ぶん。報酬は
  *     ICM(ハンド後) − ICM(ハンド前)
- * ICM は「そのチップ量が持つ順位の期待値」（下の icmEquity を参照）。
+ * ICM は「そのチップ量が持つ順位の期待値」（js/ai.js の icmEquity）。
  *
  * bb/hand（チップの収支）は報酬ではなく **見るための指標** として別に集計する。
  */
@@ -389,56 +389,9 @@ class HandEnv {
 //   ・大きいスタックは限界価値が下がる → 無駄なリスクを取らなくなる
 // というトーナメント特有の判断が出てくる。
 
-/** 順位ごとの取り分。1位 +1 〜 最下位 −1 を等間隔に割る（合計0）*/
-function placePayouts(n) {
-  if (n <= 1) return [0];
-  const out = new Array(n);
-  for (let k = 0; k < n; k++) out[k] = 1 - (2 * k) / (n - 1);
-  return out;
-}
-
-/**
- * ICM（Independent Chip Model）。
- *
- * 「次に1位で抜けるのはチップ量に比例する」という仮定のもとで順位分布を出し、
- * 賞金の期待値を返す。席数は最大6なので順列を全部たどってよい（最大720通り）。
- *
- * @param {number[]} stacks  生存者のチップ
- * @param {number[]} payouts 生存者が争う順位の取り分（stacks と同じ長さ）
- * @returns {number[]} 各席の期待値
- */
-function icmEquity(stacks, payouts) {
-  const n = stacks.length;
-  const eq = new Array(n).fill(0);
-  if (n === 0) return eq;
-  if (n === 1) { eq[0] = payouts[0]; return eq; }
-
-  const total = stacks.reduce((a, b) => a + b, 0);
-  if (total <= 0) return eq;
-
-  const used = new Array(n).fill(false);
-
-  const walk = (place, remain, prob) => {
-    if (prob < 1e-12) return;
-    // 残り1人は自動的に最下位が確定する
-    if (place === n - 1) {
-      const last = used.indexOf(false);
-      if (last >= 0) eq[last] += prob * payouts[place];
-      return;
-    }
-    for (let i = 0; i < n; i++) {
-      if (used[i]) continue;
-      const p = remain > 0 ? stacks[i] / remain : 0;
-      if (p <= 0) continue;
-      eq[i] += prob * p * payouts[place];
-      used[i] = true;
-      walk(place + 1, remain - stacks[i], prob * p);
-      used[i] = false;
-    }
-  };
-  walk(0, total, 1);
-  return eq;
-}
+// 実装は js/ai.js にある。ブラウザ側の decideBet も同じ関数を使う。
+// 2つ持つと「学習した打ち方とゲーム内の打ち方が違う」という気づきにくいズレになる。
+const { placePayouts, icmEquity } = AI;
 
 /** JSON化できない値（NaN/Infinity）を潰す。ここを怠ると学習側が静かに壊れる。 */
 function sanitize(arr) {

@@ -298,6 +298,104 @@ function expectedCalcTime(game, myExtra, callProbability = 0.55) {
 }
 
 // ============================================================
+// トーナメントの価値（ICM）
+// ============================================================
+//
+// このゲームは1人残るまで戦うトーナメントで、リバイが無い。
+// チップの価値は線形ではない。
+//   ・持っているほど追加1点の価値が下がる（限界効用が逓減する）
+//   ・0 になったら終わり。取り返す機会そのものが消える
+//
+// この2つを入れないと「期待値がわずかにプラスならコール」が常に正しくなり、
+// AIは毎ハンド全部突っ込む。実際そうなっていた（大学生で78%がオールイン）。
+//
+// 学習側（train/env_server.js）の報酬もこの関数を使う。実装を2つ持つと
+// 「学習した打ち方とゲーム内の打ち方が違う」という気づきにくいズレになるので、
+// ブラウザからも読めるここに1つだけ置く。
+
+/** 順位ごとの取り分。1位 +1 〜 最下位 −1 を等間隔に割る（合計0）*/
+function placePayouts(n) {
+  if (n <= 1) return [0];
+  const out = new Array(n);
+  for (let k = 0; k < n; k++) out[k] = 1 - (2 * k) / (n - 1);
+  return out;
+}
+
+/**
+ * ICM（Independent Chip Model）。
+ *
+ * 「次に1位で抜けるのはチップ量に比例する」という仮定のもとで順位分布を出し、
+ * 賞金の期待値を返す。席数は最大6なので順列を全部たどってよい（最大720通り）。
+ *
+ * @param {number[]} stacks  生存者のチップ
+ * @param {number[]} payouts 生存者が争う順位の取り分（stacks と同じ長さ）
+ * @returns {number[]} 各席の期待値
+ */
+function icmEquity(stacks, payouts) {
+  const n = stacks.length;
+  const eq = new Array(n).fill(0);
+  if (n === 0) return eq;
+  if (n === 1) { eq[0] = payouts[0]; return eq; }
+
+  const total = stacks.reduce((a, b) => a + b, 0);
+  if (total <= 0) return eq;
+
+  const used = new Array(n).fill(false);
+
+  const walk = (place, remain, prob) => {
+    if (prob < 1e-12) return;
+    if (place === n - 1) {
+      const last = used.indexOf(false);
+      if (last >= 0) eq[last] += prob * payouts[place];
+      return;
+    }
+    for (let i = 0; i < n; i++) {
+      if (used[i]) continue;
+      const p = remain > 0 ? stacks[i] / remain : 0;
+      if (p <= 0) continue;
+      eq[i] += prob * p * payouts[place];
+      used[i] = true;
+      walk(place + 1, remain - stacks[i], prob * p);
+      used[i] = false;
+    }
+  };
+  walk(0, total, 1);
+  return eq;
+}
+
+/**
+ * 自分のスタックが delta だけ動いたときの、自分の ICM 期待値。
+ *
+ * 増減は他の生存者と按分する（チップは湧かないし消えない）。
+ * 自分が 0 になったらその場で最下位が確定するので、最下位の取り分を返す。
+ *
+ * @param {number[]} stacks 生存者全員のチップ
+ * @param {number} idx      自分の位置
+ * @param {number} delta    自分のチップの増減
+ */
+function icmAfterDelta(stacks, idx, delta) {
+  const n = stacks.length;
+  const payouts = placePayouts(n);
+  if (n <= 1) return payouts[0];
+
+  const mine = stacks[idx] + delta;
+  if (mine <= 1e-9) return payouts[n - 1];        // 飛んだ
+
+  const othersTotal = stacks.reduce((a, b, i) => a + (i === idx ? 0 : b), 0);
+  const next = stacks.slice();
+  next[idx] = mine;
+
+  // 自分が得た（失った）分を、他の席から持ち分に応じて引く（足す）
+  if (othersTotal > 0) {
+    for (let i = 0; i < n; i++) {
+      if (i === idx) continue;
+      next[i] = Math.max(0, stacks[i] - delta * (stacks[i] / othersTotal));
+    }
+  }
+  return icmEquity(next, payouts)[idx];
+}
+
+// ============================================================
 // 候補の効用
 // ============================================================
 
@@ -491,6 +589,57 @@ function produceSubmission(cand, timeAvailable, profile, opponents, rng, model) 
 
 const BET_ACTIONS = ['fold', 'checkcall', 'raise_half', 'raise_pot', 'raise_2pot', 'allin'];
 
+// ============================================================
+// 相手が降りる確率（フォールドエクイティ）
+// ============================================================
+//
+// **根拠のある数字ではない。** 相手の手札は見えないし、このゲームの
+// 「降り方」の実測も無い。形だけ理屈で決めて、値は判断で置いている。
+//
+// 形の理屈:
+//   ・相手はポットオッズで考える。コール額がポットに対して大きいほど降りる
+//   ・ただしこのゲームでは **ポットが増えると計算時間が全員分伸びる**。
+//     時間が伸びれば相手も当てやすくなるので、そのぶんコール側に引き戻される。
+//     普通のポーカーには無い項で、大きなブラフに固有のコストになっている
+
+const BET_MODEL = {
+  /** 追加ベットが 0 のときのコール率 */
+  CALL_AT_ZERO: 0.85,
+  /** コール率が半分になる追加ベット（ポットの何倍か） */
+  HALF_AT: 1.2,
+  /** 計算時間が伸びたぶん、どれだけコール側へ引き戻すか */
+  TIME_PULL: 0.30,
+  /** コール率の下限・上限（0や1に振り切らせない） */
+  CALL_MIN: 0.05, CALL_MAX: 0.95,
+  /** ブラフ気分のとき「相手は降りる」をどれだけ強気に見るか */
+  BLUFF_OPTIMISM: 1.6,
+  /** aggression（1.0が標準）が賭け側の評価に効く強さ */
+  AGGRESSION_WEIGHT: 0.5,
+};
+
+/**
+ * 相手1人がコールしてくる確率。
+ *
+ * @param {number} raiseOver コールを超えて積む額
+ * @param {number} pot       現在のポット
+ * @param {number} toCall    自分がコールに要する額（相手から見た「既に入っている圧」）
+ */
+function callProbability(raiseOver, pot, toCall, config) {
+  if (raiseOver <= 0) return BET_MODEL.CALL_AT_ZERO;
+
+  const ratio = raiseOver / Math.max(pot + toCall, 1);
+  let p = BET_MODEL.CALL_AT_ZERO / (1 + ratio / BET_MODEL.HALF_AT);
+
+  // ポットが伸びたぶん計算時間が伸びる → 相手も当てやすくなる → コール寄りに戻る
+  const before = calcTimeForPot(pot + toCall, config);
+  const after = calcTimeForPot(pot + toCall + raiseOver, config);
+  const max = (config && config.maxCalcTime) || 600;
+  const gain = Math.max(0, Math.min(1, (after - before) / max));
+  p += BET_MODEL.TIME_PULL * gain * (1 - p);
+
+  return Math.max(BET_MODEL.CALL_MIN, Math.min(BET_MODEL.CALL_MAX, p));
+}
+
 /** 現在のハンドの強さ（自分の最良候補の効用）を、期待ポットのもとで測る */
 function handStrength(game, playerIdx, profile, myExtra = 0, model = OPPONENT_MODEL) {
   const player = game.players[playerIdx];
@@ -505,16 +654,61 @@ function handStrength(game, playerIdx, profile, myExtra = 0, model = OPPONENT_MO
 /**
  * ベット額の決定。
  *
- * 設計指示 7 の要:「ベットするとポットが増え、結果として計算時間が伸びて
- * 自分の正答率が上がる」。つまり *難しい式を持っているほどレイズしたい*。
- * 候補ごとに「その額を出したときの期待計算時間」で正答率を引き直し、
- * 期待値が最大になる額を選ぶ。
+ * ============================================================
+ * 3つの力の釣り合いで決める
+ * ============================================================
+ * 1. **計算時間**（設計指示 7）
+ *    ベットするとポットが増え、計算フェーズの制限時間が伸びて自分の正答率が上がる。
+ *    つまり *難しい式を持っているほど賭けたい*。
+ *    ただしこのゲームの制限時間は**卓で共通**なので、伸びるのは相手の時間も同じ。
+ *    大きく賭けると、受けた相手も当てやすくなる。
+ *
+ * 2. **フォールドエクイティ**
+ *    大きく賭けるほど相手は降りやすい。全員降りれば**ショーダウン抜きで**ポットを取れる。
+ *    弱い手で大きく賭ける、つまり **ブラフが成立するのはここだけ**。
+ *
+ * 3. **トーナメントの価値（ICM）**
+ *    チップの損得ではなく**順位の期待値**で測る。
+ *    全部突っ込んで負ければトーナメントが終わるので、その損は同じ枚数の得より大きい。
+ *
+ * ============================================================
+ * 以前の作り（毎ハンド全部突っ込んでいた）
+ * ============================================================
+ *     finalPot = pot + extra * (1 + opponents * 0.55)
+ *     ev       = utility * finalPot - (1 - utility) * extra
+ *
+ * extra についての傾きが `utility × (1+opponents×0.55) − (1−utility)` なので、
+ * 3人卓では **utility が 0.323 を超えた瞬間に「賭けるほど得」**になり、
+ * 常にオールインが最大になった。実測で大学生の 78%、競技者の 85% がオールイン。
+ * レイズ3段階は 0.2% しか使われず、行動空間が {fold, call, allin} に潰れていた。
+ *
+ * 原因は「相手は必ずベットの55%ずつ付いてくる」という仮定で、
+ * **ベットを増やすことの不利益がモデルに存在しなかった**こと。
+ * 上の 2（降りられたらショーダウン価値が消える）と 3（飛ぶ）が両方とも
+ * 大きくするほど効くので、今は内側に最大値ができる。
  */
 function decideBet(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
   const player = game.players[playerIdx];
   const toCall = Math.max(0, game.currentBet - player.currentBet);
   const pot = game.pot;
   const opponents = Math.max(1, game.activePlayers().length - 1);
+  const cands = candidateSet(player.hand, profile);
+
+  // ---- ICM の土台 ----
+  const live = game.livePlayers();
+  const myLiveIdx = live.indexOf(player);
+  const stacks = live.map((p) => Math.max(0, p.chips));
+  const icm = (delta) => (myLiveIdx < 0 || live.length <= 1)
+    ? delta                                   // 単独 or 見つからない → チップそのもの
+    : icmAfterDelta(stacks, myLiveIdx, delta);
+
+  // 今降りた場合。既に出した分は戻らないので増減 0
+  const eqFoldNow = icm(0);
+
+  // ブラフ気分のハンドかどうか。ここで1回だけ振る。
+  // 「相手は降りる」と強気に見積もる方向に効かせるので、弱い手ほど大きく賭ける
+  // ＝ ブラフになる。以前のように fold 判定をランダムに無効化するのではない。
+  const bluffing = rng() < profile.bluffRate;
 
   const sizes = [
     { action: 'checkcall', extra: Math.min(toCall, player.chips) },
@@ -525,44 +719,65 @@ function decideBet(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
   ];
 
   let best = null;
+  const seen = new Set();
+
   for (const s of sizes) {
-    const t = expectedCalcTime(game, s.extra);
-    const cands = candidateSet(player.hand, profile);
+    if (s.extra > player.chips) continue;
+    if (seen.has(s.extra) && s.action !== 'checkcall') continue;   // 同額の重複を潰す
+    seen.add(s.extra);
+
+    const raiseOver = Math.max(0, s.extra - toCall);      // コールを超えて積む分
+    const pCall = callProbability(raiseOver, pot, toCall, game.config);
+    const pAllFold = raiseOver > 0 || toCall > 0
+      ? Math.pow(1 - pCall, opponents) * (bluffing ? BET_MODEL.BLUFF_OPTIMISM : 1)
+      : 0;                                                // チェックで回すなら降りようがない
+
+    // 期待計算時間は「実際に付いてくる人数」で見積もる
+    const callers = opponents * pCall;
+    const t = calcTimeForPot(pot + s.extra + callers * raiseOver, game.config);
     const pick = chooseCandidate(cands, t, profile, opponents, model);
     if (!pick) continue;
-    const finalPot = pot + s.extra * (1 + (opponents) * 0.55);
-    // 勝てば finalPot を取り、負ければ自分の追加分を失う
-    const ev = pick.utility * finalPot - (1 - pick.utility) * s.extra;
-    const aggr = s.action === 'checkcall' ? 1 : profile.aggression;
-    const score = ev * aggr;
-    if (!best || score > best.score) best = { ...s, score, ev, equity: pick.utility, calcTime: t };
+
+    // ---- 3つの結末を ICM で評価する ----
+    // (a) 全員降りた: ショーダウン無しでポットを取る。増減は +pot
+    const eqSteal = icm(pot);
+    // (b) 受けられて勝った
+    const finalPot = pot + s.extra + callers * raiseOver;
+    const eqWin = icm(finalPot - s.extra);
+    // (c) 受けられて負けた
+    const eqLose = icm(-s.extra);
+
+    const u = pick.utility;
+    const showdown = u * eqWin + (1 - u) * eqLose;
+    let score = Math.min(1, pAllFold) * eqSteal + (1 - Math.min(1, pAllFold)) * showdown;
+
+    // 性格。積極的なプロファイルほど、賭ける側の選択肢を高く評価する
+    if (s.action !== 'checkcall') {
+      score += (score - eqFoldNow) * (profile.aggression - 1) * BET_MODEL.AGGRESSION_WEIGHT;
+    }
+
+    if (!best || score > best.score) {
+      best = { ...s, score, equity: u, calcTime: t, pAllFold, pCall };
+    }
   }
 
   if (!best) return { action: 'fold', amount: 0 };
 
-  const equity = best.equity;
+  // ---- 降りるかどうか ----
+  // 「一番良い賭け方をしても、いま降りるより悪い」なら降りる。
+  // ポットオッズの比較を ICM に置き換えたもので、飛ぶリスクがここに入っている。
+  if (toCall > 0 && best.score < eqFoldNow) return { action: 'fold', amount: 0 };
 
-  // ---- 降りるかどうか: ポットオッズと比べる ----
-  if (toCall > 0) {
-    const potOdds = toCall / (pot + toCall);
-    const bluff = rng() < profile.bluffRate;
-    if (equity < potOdds * 0.85 && !bluff) return { action: 'fold', amount: 0 };
-    if (toCall >= player.chips) return { action: 'allin', amount: player.chips };
-  }
-
-  // ---- レイズするか ----
-  const wantRaise = best.action !== 'checkcall'
-    && (equity > 0.45 || rng() < profile.bluffRate);
-
-  if (!wantRaise) {
+  // ---- 実際の行動に落とす ----
+  if (best.action === 'checkcall') {
     return toCall > 0 ? { action: 'call', amount: 0 } : { action: 'check', amount: 0 };
   }
 
   const target = player.currentBet + best.extra;
-  const minTotal = game.currentBet + game.minRaise;
-  if (target >= player.currentBet + player.chips) {
+  if (best.action === 'allin' || target >= player.currentBet + player.chips) {
     return { action: 'allin', amount: player.chips };
   }
+  const minTotal = game.currentBet + game.minRaise;
   return { action: 'raise', amount: Math.max(minTotal, Math.round(target)) };
 }
 
@@ -717,8 +932,9 @@ const AI = {
   enumerateFormulas, candidateSet, candidateUtility, chooseCandidate,
   correctDeclaration, wrongDeclaration, produceSubmission,
   decideBet, decideExchange, handStrength,
-  calcTimeForPot, expectedCalcTime, beatsOneOpponent,
-  OPPONENT_MODEL, BET_ACTIONS, cardsUsed, cardStaticValue,
+  calcTimeForPot, expectedCalcTime, beatsOneOpponent, callProbability,
+  placePayouts, icmEquity, icmAfterDelta,
+  OPPONENT_MODEL, BET_MODEL, BET_ACTIONS, cardsUsed, cardStaticValue,
 };
 
 if (typeof module !== 'undefined' && module.exports) {
