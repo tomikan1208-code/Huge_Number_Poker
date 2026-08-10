@@ -687,7 +687,17 @@ function handStrength(game, playerIdx, profile, myExtra = 0, model = OPPONENT_MO
  * 上の 2（降りられたらショーダウン価値が消える）と 3（飛ぶ）が両方とも
  * 大きくするほど効くので、今は内側に最大値ができる。
  */
-function decideBet(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
+/**
+ * 各ベット額を評価する。decideBet の中身であり、テスト場が内訳を見るための入口でもある。
+ *
+ * 判断の理由が外から見えないと「なぜ降りたのか」が分からないので、
+ * 選ばれなかった額も含めて全部返す。
+ *
+ * @param {boolean} [bluffing] ブラフ気分か。省略時は profile.bluffRate で振らない（false）
+ * @returns {{sizes:Array, best:object|null, eqFoldNow:number, folds:boolean,
+ *            toCall:number, pot:number, opponents:number, cands:Array}}
+ */
+function evaluateBetSizes(game, playerIdx, profile, model = OPPONENT_MODEL, bluffing = false) {
   const player = game.players[playerIdx];
   const toCall = Math.max(0, game.currentBet - player.currentBet);
   const pot = game.pot;
@@ -705,12 +715,7 @@ function decideBet(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
   // 今降りた場合。既に出した分は戻らないので増減 0
   const eqFoldNow = icm(0);
 
-  // ブラフ気分のハンドかどうか。ここで1回だけ振る。
-  // 「相手は降りる」と強気に見積もる方向に効かせるので、弱い手ほど大きく賭ける
-  // ＝ ブラフになる。以前のように fold 判定をランダムに無効化するのではない。
-  const bluffing = rng() < profile.bluffRate;
-
-  const sizes = [
+  const wanted = [
     { action: 'checkcall', extra: Math.min(toCall, player.chips) },
     { action: 'raise_half', extra: Math.min(toCall + Math.round(pot * 0.5), player.chips) },
     { action: 'raise_pot', extra: Math.min(toCall + pot, player.chips) },
@@ -718,67 +723,82 @@ function decideBet(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
     { action: 'allin', extra: player.chips },
   ];
 
+  const sizes = [];
   let best = null;
   const seen = new Set();
 
-  for (const s of sizes) {
+  for (const s of wanted) {
     if (s.extra > player.chips) continue;
     if (seen.has(s.extra) && s.action !== 'checkcall') continue;   // 同額の重複を潰す
     seen.add(s.extra);
 
     const raiseOver = Math.max(0, s.extra - toCall);      // コールを超えて積む分
     const pCall = callProbability(raiseOver, pot, toCall, game.config);
-    const pAllFold = raiseOver > 0 || toCall > 0
+    const pAllFold = Math.min(1, (raiseOver > 0 || toCall > 0)
       ? Math.pow(1 - pCall, opponents) * (bluffing ? BET_MODEL.BLUFF_OPTIMISM : 1)
-      : 0;                                                // チェックで回すなら降りようがない
+      : 0);                                               // チェックで回すなら降りようがない
 
     // 期待計算時間は「実際に付いてくる人数」で見積もる
     const callers = opponents * pCall;
-    const t = calcTimeForPot(pot + s.extra + callers * raiseOver, game.config);
-    const pick = chooseCandidate(cands, t, profile, opponents, model);
+    const calcTime = calcTimeForPot(pot + s.extra + callers * raiseOver, game.config);
+    const pick = chooseCandidate(cands, calcTime, profile, opponents, model);
     if (!pick) continue;
 
     // ---- 3つの結末を ICM で評価する ----
-    // (a) 全員降りた: ショーダウン無しでポットを取る。増減は +pot
-    const eqSteal = icm(pot);
-    // (b) 受けられて勝った
     const finalPot = pot + s.extra + callers * raiseOver;
-    const eqWin = icm(finalPot - s.extra);
-    // (c) 受けられて負けた
-    const eqLose = icm(-s.extra);
+    const eqSteal = icm(pot);                  // 全員降りた（ショーダウン無しでポットを取る）
+    const eqWin = icm(finalPot - s.extra);     // 受けられて勝った
+    const eqLose = icm(-s.extra);              // 受けられて負けた
 
     const u = pick.utility;
     const showdown = u * eqWin + (1 - u) * eqLose;
-    let score = Math.min(1, pAllFold) * eqSteal + (1 - Math.min(1, pAllFold)) * showdown;
+    let score = pAllFold * eqSteal + (1 - pAllFold) * showdown;
 
     // 性格。積極的なプロファイルほど、賭ける側の選択肢を高く評価する
     if (s.action !== 'checkcall') {
       score += (score - eqFoldNow) * (profile.aggression - 1) * BET_MODEL.AGGRESSION_WEIGHT;
     }
 
-    if (!best || score > best.score) {
-      best = { ...s, score, equity: u, calcTime: t, pAllFold, pCall };
-    }
+    const row = {
+      action: s.action, extra: s.extra, raiseOver,
+      score, equity: u, pCorrect: pick.pCorrect, beat: pick.beat,
+      calcTime, pCall, pAllFold, finalPot,
+      eqSteal, eqWin, eqLose, pick,
+    };
+    sizes.push(row);
+    if (!best || score > best.score) best = row;
   }
 
-  if (!best) return { action: 'fold', amount: 0 };
-
-  // ---- 降りるかどうか ----
   // 「一番良い賭け方をしても、いま降りるより悪い」なら降りる。
   // ポットオッズの比較を ICM に置き換えたもので、飛ぶリスクがここに入っている。
-  if (toCall > 0 && best.score < eqFoldNow) return { action: 'fold', amount: 0 };
+  const folds = !best || (toCall > 0 && best.score < eqFoldNow);
 
-  // ---- 実際の行動に落とす ----
-  if (best.action === 'checkcall') {
-    return toCall > 0 ? { action: 'call', amount: 0 } : { action: 'check', amount: 0 };
+  return { sizes, best, eqFoldNow, folds, toCall, pot, opponents, cands };
+}
+
+/** evaluateBetSizes の結果を Game が受け取れる形に落とす */
+function resolveBetChoice(game, playerIdx, ev) {
+  const player = game.players[playerIdx];
+  if (ev.folds || !ev.best) return { action: 'fold', amount: 0 };
+
+  if (ev.best.action === 'checkcall') {
+    return ev.toCall > 0 ? { action: 'call', amount: 0 } : { action: 'check', amount: 0 };
   }
-
-  const target = player.currentBet + best.extra;
-  if (best.action === 'allin' || target >= player.currentBet + player.chips) {
+  const target = player.currentBet + ev.best.extra;
+  if (ev.best.action === 'allin' || target >= player.currentBet + player.chips) {
     return { action: 'allin', amount: player.chips };
   }
   const minTotal = game.currentBet + game.minRaise;
   return { action: 'raise', amount: Math.max(minTotal, Math.round(target)) };
+}
+
+function decideBet(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
+  // ブラフ気分かどうかはここで1回だけ振る。
+  // 「相手は降りる」と強気に見積もる方向に効かせるので、弱い手ほど大きく賭ける
+  // ＝ ブラフになる。以前のように fold 判定をランダムに無効化するのではない。
+  const bluffing = rng() < profile.bluffRate;
+  const ev = evaluateBetSizes(game, playerIdx, profile, model, bluffing);
+  return resolveBetChoice(game, playerIdx, ev);
 }
 
 /**
@@ -931,7 +951,7 @@ const AI = {
   AIPlayer, makeRng, slogScore, clearCaches,
   enumerateFormulas, candidateSet, candidateUtility, chooseCandidate,
   correctDeclaration, wrongDeclaration, produceSubmission,
-  decideBet, decideExchange, handStrength,
+  decideBet, decideExchange, handStrength, evaluateBetSizes, resolveBetChoice,
   calcTimeForPot, expectedCalcTime, beatsOneOpponent, callProbability,
   placePayouts, icmEquity, icmAfterDelta,
   OPPONENT_MODEL, BET_MODEL, BET_ACTIONS, cardsUsed, cardStaticValue,
