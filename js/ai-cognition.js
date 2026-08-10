@@ -927,9 +927,19 @@ function pickErrorTier(difficulty, rng) {
 // エクスポート
 // ============================================================
 
+/**
+ * 解析キャッシュを捨てる。
+ * COG の定数を実行中に書き換えたときは、これを呼ばないと変更が反映されない
+ * （キャッシュキーが `式|レベル` で、定数の値を含んでいないため）。
+ * ai-lab.html のチューニングパネルが使う。
+ */
+function clearAnalysisCache() {
+  _analysisCache.clear();
+}
+
 const AICognition = {
   COG, AI_PROFILES, AI_LEVEL_ORDER, getProfile,
-  analyzeFormula, accuracyUnderTime,
+  analyzeFormula, accuracyUnderTime, clearAnalysisCache,
   errorTierWeights, pickErrorTier,
   isAllowedTetration, digitsOfValue, significantDigits, isRoundValue,
   chunksOfValue, exactSmallInt, normCdf, clamp, clamp01,

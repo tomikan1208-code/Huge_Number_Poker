@@ -39,6 +39,9 @@ app.get('/', sendPage('index.html'));
 app.get('/index.html', sendPage('index.html'));
 app.get('/online', sendPage('online.html'));
 app.get('/online.html', sendPage('online.html'));
+// AIテスト場（CPUの正答率モデルを確かめる開発用ページ。読むだけなので公開しても害はない）
+app.get('/lab', sendPage('ai-lab.html'));
+app.get('/ai-lab.html', sendPage('ai-lab.html'));
 
 // 上記以外は 404（ディレクトリ一覧やソースの覗き見を防ぐ）
 app.use((req, res) => res.status(404).type('text/plain').send('Not Found'));

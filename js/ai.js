@@ -702,8 +702,18 @@ class AIPlayer {
 // エクスポート
 // ============================================================
 
+/**
+ * 評価キャッシュと候補キャッシュを捨てる。
+ * candidateSet の結果には ai-cognition の解析結果が埋まっているので、
+ * COG の定数を実行中に書き換えたら、こちらも捨てないと古い難易度が残る。
+ */
+function clearCaches() {
+  _evalCache.clear();
+  _handCache.clear();
+}
+
 const AI = {
-  AIPlayer, makeRng, slogScore,
+  AIPlayer, makeRng, slogScore, clearCaches,
   enumerateFormulas, candidateSet, candidateUtility, chooseCandidate,
   correctDeclaration, wrongDeclaration, produceSubmission,
   decideBet, decideExchange, handStrength,

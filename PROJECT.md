@@ -251,6 +251,7 @@ SETTING → DEALING → BETTING_1 → EXCHANGE → BETTING_2 → CALCULATION →
 Huge_Number_Poker/
 ├── index.html                  ローカル/ソロ用の全画面（ホーム・設定・ソロ・ルール・ゲーム）
 ├── online.html                 オンライン対戦用（ロビー＋ゲーム画面）
+├── ai-lab.html                 AIテスト場（CPUの正答率を確かめる。§12.10）
 ├── server.js                   Express + Socket.io。部屋管理・サーバー権威のゲーム進行
 ├── package.json                deps: express, socket.io / `npm start` で server.js
 ├── start.bat                   起動一式（クリーンアップ→依存確認→FW確認→サーバ起動→ブラウザ）
@@ -258,7 +259,8 @@ Huge_Number_Poker/
 ├── share-internet.bat / .ps1   Cloudflare Tunnel で公開（遠くの友達と対戦する用）
 ├── game-ui-template-skill.md   UIフレームワーク定義（全体のデザイン基準）
 ├── css/
-│   └── style.css               全スタイル（:root のCSS変数、カード、D&D、ショーダウン等）
+│   ├── style.css               全スタイル（:root のCSS変数、カード、D&D、ショーダウン等）
+│   └── ai-lab.css              AIテスト場のレイアウトのみ（カードの見た目は style.css を流用）
 ├── js/
 │   ├── engine.js               HugeNumber / FormulaParser / FormulaEvaluator（全モード共有）
 │   ├── game.js                 Game クラス・デッキ構築・フェーズ制御（クライアント/サーバ共有）
@@ -267,7 +269,8 @@ Huge_Number_Poker/
 │   ├── ui.js                   ローカル/ソロモードのUI制御
 │   ├── online-manager.js       Socket.io 接続ラッパ
 │   ├── online-lobby.js         ロビー画面（部屋作成・参加・設定）
-│   └── online-game.js          オンライン対戦のゲーム画面UI
+│   ├── online-game.js          オンライン対戦のゲーム画面UI
+│   └── ai-lab.js               AIテスト場の制御（既存APIを呼ぶだけ。ゲームロジックは持たない）
 └── node_modules/
 ```
 
@@ -627,6 +630,36 @@ powershell -ExecutionPolicy Bypass -File allow-firewall.ps1 -Remove
 ```
 
 候補ごとにこの時間で正答率を引き直し、期待値が最大になる額を選ぶ。
+
+### 12.10 テストプレイ場（`ai-lab.html`）
+
+§12 のモデルを**ゲームを回さずに直接叩く**ための画面。`/lab` または `ai-lab.html`。
+
+やることは2つだけ。
+
+| タブ | 入力 | 出力 |
+|---|---|---|
+| 式テスト | カードを並べて式 ＋ 計算時間（秒） ＋ 難易度 | 正解値・答え方・理論正答率・実測正答率・CPUの申告サンプル・内訳・5レベル比較・時間スイープ |
+| 手札テスト | 手札7枚 ＋ 計算時間 ＋ 難易度 | 候補一覧（値／所要時間／pCorrect／beat／効用）と AI がどれを選ぶか、レベルごとの選択 |
+
+正答率を**2通りで出す**のは実装どうしを突き合わせるため。
+
+```
+理論値 = accuracyUnderTime(analysis, 秒, profile).pCorrect
+実測値 = produceSubmission() を N 回 ÷ 当たった回数
+```
+
+さらに申告文字列を `FormulaEvaluator.judgeDeclaration()` に通し直し、
+`produceSubmission` が「正解」と言った申告が本当に判定を通るかも数えている
+（食い違えば画面に警告が出る＝モデルの不整合）。
+
+`js/ai-lab.js` は **ゲームロジックを一切持たない**。
+engine.js / ai-cognition.js / ai.js の公開APIを呼ぶだけにしてある。
+ここで独自に計算を書くと「ラボでは通るが本編では違う」が起きるため。
+
+チューニングパネルから `COG` の定数をその場で書き換えられる（メモリ上のみ。ファイルには保存されない）。
+書き換えたら `AICognition.clearAnalysisCache()` と `AI.clearCaches()` を呼んでキャッシュを捨てている。
+良い値が見つかったら `js/ai-cognition.js` の `COG` を手で直す。
 
 ---
 
