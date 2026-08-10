@@ -16,11 +16,31 @@ train.py — 巨大数ポーカー AI の PPO 学習
   「間違えないAI」に収束してゲームが成立しなくなる。
 
 【報酬】
+  本編は「チップ0で脱落・生存1人で終了」のトーナメント。
+  そこで報酬も **トーナメントでの順位** を狙う形にしてある。
+
   1エピソード = 1ハンド・1席。報酬は
-      (獲得ポット − そのハンドで出した額) / ビッグブラインド
-  つまり bb/hand そのもの。ダッシュボードの主指標と一致する。
+      ICM(ハンド後) − ICM(ハンド前)
+  ICM は「そのチップ量が持つ順位の期待値」（env_server.js の icmEquity）。
+
+  これを1トーナメントぶん足すと
+      ICM(最終) − ICM(開始) = 実際に取った順位の価値 − 開始時の期待値
+  に畳まれる。**毎ハンド密に報酬が入りながら、合計は本物の順位報酬と一致する**。
+  potential-based reward shaping（Ng, Harada & Russell 1999）なので、
+  最適な打ち方を変えずに学習だけを速くできる形。
+
+  「優勝で+1、あとは0」だけにすると報酬がまばらすぎて学習が進まず、
+  bb/hand のままだと飛ぶコストがゼロで無謀なオールインに収束する。
+  その両方を避けるための作り。
+
   ハンド終端でのみ報酬が入るので割引は行わない（gamma=1）。
   優位性は A = R − V(s)（PPOのクリップ付き方策勾配）。
+
+【指標】
+  bb/hand      … チップの稼ぎ。従来どおり出すが、**主指標ではない**。
+                 トーナメントでは長く残った席ほどハンド数が増えるので、
+                 席ごとの bb/hand は生存バイアスがかかる。
+  優勝率・平均順位 … 勝ち残り。過去最強を更新するかの判定はこちらで行う。
 """
 
 import os
@@ -360,10 +380,16 @@ def collect(net, env, target_decisions, gen, progress):
 
 @torch.no_grad()
 def evaluate(net, opponent, hands, tag):
-    """席0を net、他席を opponent（None ならランダム）にして bb/hand を測る。
+    """席0を net、他席を opponent（None ならランダム）にして強さを測る。
 
     自己対戦だけだと「自分だけ強くなったつもり」に陥る。
     固定の基準（ランダム / 過去最強）と必ず突き合わせる。
+
+    主指標は **優勝率**。トーナメントなので、そこが勝ち負けそのもの。
+    n人卓で互角なら 1/n に落ち着くので、それを上回れば強い。
+
+    bb/hand も出すが従属指標。長く残った席ほどハンド数が増えるので、
+    席ごとの bb/hand には生存バイアスがかかる（強いほど不利に見えることがある）。
     """
     env = NodeEnv(envs=32, players=PLAYERS, level=LEVEL, seed=SEED + 9999)
     rng = np.random.default_rng(SEED + 4242)
@@ -395,6 +421,8 @@ def evaluate(net, opponent, hands, tag):
         st = env.stats()
         seat0 = st.get('seats', {}).get('0', {})
         return {
+            f'champ_vs_{tag}': seat0.get('champion_rate', 0.0),
+            f'place_vs_{tag}': seat0.get('avg_place', 0.0),
             f'bb_vs_{tag}': seat0.get('bb_per_hand', 0.0),
             f'win_vs_{tag}': seat0.get('win_rate', 0.0),
         }
@@ -609,21 +637,31 @@ def run():
                 'submit_rate': round(env_stats.get('submit_rate', 0), 4),
                 'fold_rate': round(env_stats.get('fold_rate', 0), 4),
                 'avg_slog': round(env_stats.get('avg_slog', 0), 4),
+                # トーナメント（勝ち残り）
+                'icm_per_hand': round(env_stats.get('icm_per_hand', 0), 6),
+                'tournaments': env_stats.get('tournaments', 0),
+                'hands_per_tournament': round(env_stats.get('hands_per_tournament', 0), 2),
+                'truncated_rate': round(env_stats.get('truncated_rate', 0), 4),
             }
 
             if gen % EVAL_EVERY == 0:
                 metrics.update(evaluate(net, None, EVAL_HANDS, 'random'))
                 metrics.update(evaluate(net, best, EVAL_HANDS, 'best'))
-                # bb/hand が主指標。0 を上回れば過去最強より稼げている。
                 metrics['bb_per_hand'] = metrics.get('bb_vs_best', 0.0)
-                # 過去最強に対して bb/hand がプラス = 本当に上回った
-                if metrics['bb_per_hand'] > 0:
-                    best_score = metrics['bb_per_hand']
+
+                # 主指標は「過去最強を相手にした優勝率」。
+                # n人卓で互角なら 1/n なので、そこを超えたら本当に上回った。
+                champ = metrics.get('champ_vs_best', 0.0)
+                metrics['champion_rate'] = champ
+                even = 1.0 / max(2, PLAYERS)
+
+                if champ > even:
+                    best_score = champ
                     best.load_state_dict(net.state_dict())
                     torch.save({'state': net.state_dict(), 'obs_dim': env.obs_dim,
                                 'episode': gen}, BEST_FILE)
                     export_policy(net, env.obs_dim)
-                    print(f'🏆 過去最強を更新 (bb/hand={best_score:+.3f})', flush=True)
+                    print(f'🏆 過去最強を更新 (優勝率={champ:.3f} > 互角{even:.3f})', flush=True)
 
             torch.save({'state': net.state_dict(), 'obs_dim': env.obs_dim,
                         'episode': gen, 'retnorm': retnorm.state(),

@@ -26,11 +26,16 @@
  * これで「観測のバッチ = 環境数」になり、Python側の実装が単純になる。
  *
  * ============================================================
- * エピソードの切り方
+ * エピソードの切り方と報酬
  * ============================================================
+ * 卓は **トーナメント**として回す。チップ0で脱落、生存1人で決着、
+ * ブラインドは5ハンドごとに倍。本編（js/game.js）とまったく同じ進行。
+ *
  * 1エピソード = 1ハンド、1席ぶん。報酬は
- *     (獲得ポット − そのハンドで自分が出した額) / ビッグブラインド
- * つまり **bb/hand** そのもの。指標とそのまま一致する。
+ *     ICM(ハンド後) − ICM(ハンド前)
+ * ICM は「そのチップ量が持つ順位の期待値」（下の icmEquity を参照）。
+ *
+ * bb/hand（チップの収支）は報酬ではなく **見るための指標** として別に集計する。
  */
 
 const path = require('path');
@@ -56,11 +61,18 @@ class HandEnv {
     this.reset();
   }
 
+  /** 新しいトーナメントを始める */
   reset() {
-    this.game = new Game(this.opts.config);
+    // config はハンドごとにブラインドが書き換わるので、必ず複製して渡す
+    this.game = new Game({ ...this.opts.config });
     const names = [];
     for (let i = 0; i < this.opts.players; i++) names.push(`S${i}`);
     this.game.startGame(this.opts.players, names);
+
+    this.payouts = placePayouts(this.opts.players);
+    this.finished = [];          // 脱落した席（先に飛んだ順）
+    this.tourneyHands = 0;
+    this.tourneyResult = null;   // 直前に終わったトーナメントの結果
     this.beginHand();
   }
 
@@ -68,6 +80,69 @@ class HandEnv {
     this.handSeq++;
     this.calcDecided = new Set();
     this.handStats = { submitted: 0, correct: 0, folds: 0, slogSum: 0, slogN: 0 };
+    this.equityBefore = this.equities();
+  }
+
+  /**
+   * 各席の現在の ICM 期待値。
+   *
+   * 分母は「場にある全チップ」。持ち越し（carryOver）やポットの途中にある分を
+   * 含めないと総量が変動して、価値の足し引きが合わなくなる。
+   */
+  equities() {
+    const g = this.game;
+    const n = g.players.length;
+    const out = new Array(n).fill(0);
+
+    // 既に飛んだ席は順位が確定しているので、その取り分で固定
+    for (let k = 0; k < this.finished.length; k++) {
+      const place = n - 1 - k;                // 先に飛んだ席ほど下位
+      out[this.finished[k]] = this.payouts[place];
+    }
+
+    const liveSeats = [];
+    for (let i = 0; i < n; i++) {
+      if (!g.players[i].isEliminated) liveSeats.push(i);
+    }
+    if (liveSeats.length === 0) return out;
+
+    const stacks = liveSeats.map((i) => Math.max(0, g.players[i].chips));
+    const eq = icmEquity(stacks, this.payouts.slice(0, liveSeats.length));
+    liveSeats.forEach((seat, k) => { out[seat] = eq[k]; });
+    return out;
+  }
+
+  /**
+   * トーナメントが終わったかを見て、終わっていれば順位を確定する。
+   * @returns {boolean} 終わったなら true
+   */
+  finishTournamentIfOver() {
+    const g = this.game;
+    const n = g.players.length;
+    const live = g.players.filter((p) => !p.isEliminated);
+
+    // ブラインドは上がり続けるので普通は必ず終わるが、
+    // 万一終わらないときのために上限を置く（そこまでのスタック順で決着）
+    const tooLong = this.tourneyHands >= MAX_TOURNAMENT_HANDS;
+    if (live.length > 1 && !tooLong) return false;
+
+    // 残っている席をスタックの多い順に上位へ
+    const remaining = [];
+    for (let i = 0; i < n; i++) {
+      if (!g.players[i].isEliminated) remaining.push(i);
+    }
+    remaining.sort((a, b) => g.players[a].chips - g.players[b].chips);
+    const order = this.finished.concat(remaining);   // 下位から順に並ぶ
+
+    const places = new Array(n).fill(n - 1);
+    order.forEach((seat, k) => { places[seat] = n - 1 - k; });
+
+    this.tourneyResult = {
+      places,                              // 席 → 順位（0 が優勝）
+      hands: this.tourneyHands,
+      truncated: tooLong,
+    };
+    return true;
   }
 
   tid(seat) { return `${this.id}:${this.handSeq}:${seat}`; }
@@ -125,10 +200,21 @@ class HandEnv {
         }
 
         case 'SHOWDOWN': {
-          results.push(...this.collectRewards());
-          this.game.settle();
-          this.rebuy();
-          this.beginHand();
+          const chipDeltas = this.chipDeltas();
+          this.game.settle();               // ここで脱落判定まで進む
+          this.noteEliminations();
+          this.tourneyHands++;
+
+          // ハンド前後の ICM の差が、そのハンドの報酬になる
+          const after = this.equities();
+          results.push(...this.buildResults(chipDeltas, after));
+
+          if (this.finishTournamentIfOver()) {
+            this.lastTournament = this.tourneyResult;
+            this.reset();                   // 次のトーナメントへ
+          } else {
+            this.beginHand();
+          }
           continue;
         }
 
@@ -206,38 +292,14 @@ class HandEnv {
   }
 
   /**
-   * バーストした席をバイインし直す。
-   *
-   * ここで Game を作り直してはいけない。勝者なしポットの持ち越し（carryOver）が
-   * 消えてしまい、収支がゼロサムでなくなって bb/hand が恒常的にマイナスに偏る。
-   * 卓は同じまま、チップだけ戻す。
-   */
-  rebuy() {
-    const g = this.game;
-    const buyIn = g.config.initialChips;
-    let restored = false;
-    for (const p of g.players) {
-      if (p.isEliminated || p.chips <= 0) {
-        p.chips = buyIn;
-        p.isEliminated = false;
-        p.isActive = true;
-        p.isAllIn = false;
-        restored = true;
-      }
-    }
-    // settle() が「生存1人」で打ち切っていた場合は、ここから次ハンドを開始する
-    if (g.gameOver) {
-      g.gameOver = false;
-      if (restored || g.livePlayers().length > 1) g._nextHand();
-    }
-  }
-
-  /**
-   * ショーダウン時点で、そのハンドの各席の収支を確定する。
+   * ショーダウン時点で、そのハンドの各席のチップ収支（bb単位）を出す。
    * settle() の副作用（次ハンドのアンティ徴収など）に依存しないよう、
-   * ポットと totalBet から直接計算する。
+   * ポットと totalBet から直接計算する。**settle() の前に呼ぶこと。**
+   *
+   * これは報酬ではなく、見るための指標（bb/hand）。
+   * 学習が最大化するのは ICM のほう。
    */
-  collectRewards() {
+  chipDeltas() {
     const g = this.game;
     const bb = Math.max(1, g.config.bigBlind);
     const winners = new Set(g.winners.map(w => w.player.id));
@@ -249,21 +311,133 @@ class HandEnv {
     const out = [];
     for (let i = 0; i < g.players.length; i++) {
       const p = g.players[i];
-      if (p.isEliminated) continue;
+      if (p.isEliminated) { out.push(null); continue; }
       const payout = noWinner ? p.totalBet : (winners.has(p.id) ? share : 0);
       out.push({
-        tid: this.tid(i),
-        seat: i,
-        reward: (payout - p.totalBet) / bb,
+        bb: (payout - p.totalBet) / bb,
         won: winners.has(p.id) ? 1 : 0,
       });
     }
+
     // 「決着したか」= 誰か1人でも勝者になったか。
     // 全員失格の流局が多いと学習データとして役に立たないので、必ず監視する。
     this.handStats.decided = noWinner ? 0 : 1;
     this.lastHandStats = this.handStats;
     return out;
   }
+
+  /** settle() で新たに飛んだ席を、飛んだ順に記録する */
+  noteEliminations() {
+    const g = this.game;
+    for (let i = 0; i < g.players.length; i++) {
+      if (g.players[i].isEliminated && this.finished.indexOf(i) < 0) {
+        this.finished.push(i);
+      }
+    }
+  }
+
+  /** そのハンドの学習用サンプルを組み立てる */
+  buildResults(chipDeltas, equityAfter) {
+    const before = this.equityBefore || [];
+    const out = [];
+    for (let i = 0; i < chipDeltas.length; i++) {
+      const d = chipDeltas[i];
+      if (!d) continue;                     // そのハンドの開始時点で既に脱落
+      out.push({
+        tid: this.tid(i),
+        seat: i,
+        // 学習が最大化するのはこれ（ICM の増減）
+        reward: (equityAfter[i] || 0) - (before[i] || 0),
+        // 以下は見るための指標
+        bb: d.bb,
+        won: d.won,
+      });
+    }
+    return out;
+  }
+}
+
+// ============================================================
+// トーナメントの価値関数（ICM）
+// ============================================================
+//
+// 本編は「チップ0で脱落・生存1人で終了」のトーナメント。
+// なのに報酬を bb/hand（そのハンドの収支）にすると、
+// **飛ぶことのコストがゼロ**になってしまう。わずかにプラス期待値なら
+// 常にオールインが正解、という打ち方に収束する。
+//
+// かといって「優勝したら +1、それ以外 0」だけにすると報酬がまばらすぎて
+// 学習が進まない（1トーナメント数十ハンド × 全意思決定に1つの数字しか入らない）。
+//
+// そこでポーカーの標準的な考え方 ICM を使う。
+// チップそのものではなく **そのチップ量が持つ「順位の期待値」** を価値とし、
+//
+//     そのハンドの報酬 = ICM(ハンド後) − ICM(ハンド前)
+//
+// とする。これを1トーナメントぶん足すと
+//
+//     ICM(最終) − ICM(開始) = 実際に取った順位の価値 − 開始時の期待値
+//
+// に畳まれる。つまり **毎ハンド密に報酬が入りながら、合計は本物の順位報酬と一致する**。
+// これは potential-based reward shaping（Ng, Harada & Russell 1999）そのもので、
+// 最適な打ち方を変えないことが保証されている形。
+//
+// 賞金配分を「1位総取り」にすると ICM はチップ比率そのもの（＝線形）になり、
+// 結局チップEVと同じになってしまう。順位に応じて配分を分けることで
+// 価値がスタックに対して **凹** になり、
+//   ・短いスタックは価値が急に落ちる → 飛ぶのを避けるようになる
+//   ・大きいスタックは限界価値が下がる → 無駄なリスクを取らなくなる
+// というトーナメント特有の判断が出てくる。
+
+/** 順位ごとの取り分。1位 +1 〜 最下位 −1 を等間隔に割る（合計0）*/
+function placePayouts(n) {
+  if (n <= 1) return [0];
+  const out = new Array(n);
+  for (let k = 0; k < n; k++) out[k] = 1 - (2 * k) / (n - 1);
+  return out;
+}
+
+/**
+ * ICM（Independent Chip Model）。
+ *
+ * 「次に1位で抜けるのはチップ量に比例する」という仮定のもとで順位分布を出し、
+ * 賞金の期待値を返す。席数は最大6なので順列を全部たどってよい（最大720通り）。
+ *
+ * @param {number[]} stacks  生存者のチップ
+ * @param {number[]} payouts 生存者が争う順位の取り分（stacks と同じ長さ）
+ * @returns {number[]} 各席の期待値
+ */
+function icmEquity(stacks, payouts) {
+  const n = stacks.length;
+  const eq = new Array(n).fill(0);
+  if (n === 0) return eq;
+  if (n === 1) { eq[0] = payouts[0]; return eq; }
+
+  const total = stacks.reduce((a, b) => a + b, 0);
+  if (total <= 0) return eq;
+
+  const used = new Array(n).fill(false);
+
+  const walk = (place, remain, prob) => {
+    if (prob < 1e-12) return;
+    // 残り1人は自動的に最下位が確定する
+    if (place === n - 1) {
+      const last = used.indexOf(false);
+      if (last >= 0) eq[last] += prob * payouts[place];
+      return;
+    }
+    for (let i = 0; i < n; i++) {
+      if (used[i]) continue;
+      const p = remain > 0 ? stacks[i] / remain : 0;
+      if (p <= 0) continue;
+      eq[i] += prob * p * payouts[place];
+      used[i] = true;
+      walk(place + 1, remain - stacks[i], prob * p);
+      used[i] = false;
+    }
+  };
+  walk(0, total, 1);
+  return eq;
 }
 
 /** JSON化できない値（NaN/Infinity）を潰す。ここを怠ると学習側が静かに壊れる。 */
@@ -291,8 +465,11 @@ class EnvPool {
   resetStats() {
     this.stats = {
       hands: 0, decided: 0, submissions: 0, correct: 0, folds: 0,
-      slogSum: 0, slogN: 0, rewardSum: 0, rewardN: 0, timeouts: 0,
-      seatReward: {}, seatN: {}, seatWins: {},
+      slogSum: 0, slogN: 0, rewardSum: 0, rewardN: 0, bbSum: 0, timeouts: 0,
+      seatReward: {}, seatBb: {}, seatN: {}, seatWins: {},
+      // トーナメント（勝ち残り）の成績
+      tournaments: 0, tourneyHandSum: 0, truncated: 0,
+      seatChamp: {}, seatPlaceSum: {}, seatTourneys: {},
     };
   }
 
@@ -326,11 +503,27 @@ class EnvPool {
     }
     for (const r of results) {
       this.stats.rewardSum += r.reward;
+      this.stats.bbSum += r.bb || 0;
       this.stats.rewardN++;
       // 席ごとの成績。評価（学習中の方策 vs 過去最強 / ランダム）で使う。
       this.stats.seatReward[r.seat] = (this.stats.seatReward[r.seat] || 0) + r.reward;
+      this.stats.seatBb[r.seat] = (this.stats.seatBb[r.seat] || 0) + (r.bb || 0);
       this.stats.seatN[r.seat] = (this.stats.seatN[r.seat] || 0) + 1;
       this.stats.seatWins[r.seat] = (this.stats.seatWins[r.seat] || 0) + r.won;
+    }
+
+    // トーナメントが1つ終わっていれば順位を取り込む
+    const t = env.lastTournament;
+    if (t) {
+      env.lastTournament = null;
+      this.stats.tournaments++;
+      this.stats.tourneyHandSum += t.hands;
+      if (t.truncated) this.stats.truncated++;
+      t.places.forEach((place, seat) => {
+        this.stats.seatTourneys[seat] = (this.stats.seatTourneys[seat] || 0) + 1;
+        this.stats.seatPlaceSum[seat] = (this.stats.seatPlaceSum[seat] || 0) + place;
+        if (place === 0) this.stats.seatChamp[seat] = (this.stats.seatChamp[seat] || 0) + 1;
+      });
     }
   }
 
@@ -348,20 +541,32 @@ class EnvPool {
     const s = this.stats;
     const seats = {};
     for (const k of Object.keys(s.seatN)) {
+      const nt = s.seatTourneys[k] || 0;
       seats[k] = {
-        bb_per_hand: s.seatReward[k] / s.seatN[k],
+        // チップの稼ぎ（見るための指標）
+        bb_per_hand: s.seatBb[k] / s.seatN[k],
         win_rate: (s.seatWins[k] || 0) / s.seatN[k],
         hands: s.seatN[k],
+        // 勝ち残り（学習が本当に狙っているもの）
+        icm_per_hand: s.seatReward[k] / s.seatN[k],
+        champion_rate: nt ? (s.seatChamp[k] || 0) / nt : 0,
+        avg_place: nt ? (s.seatPlaceSum[k] || 0) / nt + 1 : 0,   // 1位を1とする
+        tournaments: nt,
       };
     }
     const out = {
       hands: s.hands,
       finish_rate: s.hands ? s.decided / s.hands : 0,
-      bb_per_hand: s.rewardN ? s.rewardSum / s.rewardN : 0,
+      bb_per_hand: s.rewardN ? s.bbSum / s.rewardN : 0,
+      icm_per_hand: s.rewardN ? s.rewardSum / s.rewardN : 0,
       declare_accuracy: s.submissions ? s.correct / s.submissions : 0,
       submit_rate: s.slogN ? s.submissions / s.slogN : 0,
       fold_rate: s.hands ? s.folds / (s.hands * this.opts.players) : 0,
       avg_slog: s.slogN ? s.slogSum / s.slogN : 0,
+      // トーナメント
+      tournaments: s.tournaments,
+      hands_per_tournament: s.tournaments ? s.tourneyHandSum / s.tournaments : 0,
+      truncated_rate: s.tournaments ? s.truncated / s.tournaments : 0,
       seats,
     };
     this.resetStats();
@@ -373,11 +578,17 @@ class EnvPool {
 // メインループ
 // ============================================================
 
+// 本編（js/game.js の DEFAULT_CONFIG）と揃える。
+// とくに levelUpHands は 0 にしてはいけない。ブラインドが上がらないと
+// スタックが削られず、トーナメントがいつまでも終わらない。
 const DEFAULT_CONFIG = {
   initialChips: 1000, smallBlind: 10, bigBlind: 20, ante: 5,
-  betTimeLimit: 10, dealerTimeLimit: 20, levelUpHands: 0,
+  betTimeLimit: 10, dealerTimeLimit: 20, levelUpHands: 5,
   deckCount: 1, autoCalcMode: false, minCalcTime: 30, maxCalcTime: 600,
 };
+
+/** 1トーナメントの上限ハンド数。これを超えたらスタック順で打ち切る */
+const MAX_TOURNAMENT_HANDS = 300;
 
 let pool = null;
 
