@@ -1,0 +1,9 @@
+# .vbs は UTF-16LE(BOM付き) でなければ Windows Script Host が読めない。
+# git に改行変換やテキスト正規化をさせると BOM ごと壊れて、
+# 「ダブルクリックしても無反応」になる（エラーも出ない）。
+# バイナリ扱いにして一切触らせない。
+*.vbs binary
+
+# Windows のコンソールで実行するものは CRLF に固定する
+*.bat text eol=crlf
+*.ps1 text eol=crlf

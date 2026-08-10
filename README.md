@@ -89,14 +89,33 @@ http://localhost:3000/lab — ホーム画面の「🧪 AIテスト場」から�
 **正答率のモデルは学習しない**（人間を模した固定の物理法則として扱う。
 学習させると「間違えないAI」に収束してゲームが成立しなくなる）。
 
+### GUI で回す（Windows）
+
+**`AI学習コントロールパネル.vbs` をダブルクリック。** それだけ。
+
+コンソールもアドレスバーも出ず、独立したウィンドウで開く。
+右クリック →「ショートカットの作成」でデスクトップに置けば普通のアプリになる。
+
+開始／停止、レベルの切り替え、世代ごとのグラフと表、生ログがひととおり入っている。
+ウィンドウを閉じるとサーバーも止まる（学習中なら停止と同じ扱い。
+世代ごとに保存しているので、失うのは進行中の1世代分だけ）。
+
+**起動しないときは `AI学習コントロールパネル.bat`** を実行する。
+Python と依存パッケージを確認して、足りなければその場で入れられる。
+
+初回だけ準備が要る:
+
 ```bash
-python train/launcher.py        # GUI（開始/停止・グラフ・表）
+pip install -r train/requirements.txt
 ```
 
-GUI を使わず直接回すなら:
+Node.js も必要（環境＝ゲームのルールが Node 側にあるため）。
+
+### 直接回す
 
 ```bash
-python train/train.py
+python train/launcher.py    # GUI（Windows以外はこちら）
+python train/train.py       # GUIなし
 ```
 
 環境（ゲームのルールと巨大数エンジン）は **Node 側**が持ち、Python は学習だけを行う。
@@ -139,6 +158,8 @@ node train/env_server.js --selfplay 300 --level skilled
 ```
 index.html / online.html      画面
 ai-lab.html                   AIテスト場
+AI学習コントロールパネル.vbs   学習GUIを開く（コンソールなし）
+AI学習コントロールパネル.bat   同上（コンソールあり・依存の確認つき）
 server.js                     Express + Socket.io（オンライン対戦）
 js/
   engine.js                   巨大数エンジン（HugeNumber / パーサ / 評価・判定）

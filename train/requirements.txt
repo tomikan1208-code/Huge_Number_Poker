@@ -1,0 +1,16 @@
+# 巨大数ポーカー AI 学習 — Python 側の依存
+#
+#   pip install -r train/requirements.txt
+#
+# 環境（ゲームのルールと巨大数エンジン）は Node 側が持っているので、
+# 別途 Node.js も必要（https://nodejs.org/）。
+# ルールを二重管理しないための構成で、詳細は PROJECT.md §13 を参照。
+
+# 学習コントロールパネル（GUI）
+flask>=3.0
+
+# PPO 学習器
+# GPU を使うなら https://pytorch.org/get-started/locally/ の指示で入れ直すこと
+# （CPU版が入っていても学習はできるが、世代あたりの時間が数倍になる）
+torch>=2.0
+numpy>=1.24
