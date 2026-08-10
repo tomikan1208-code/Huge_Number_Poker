@@ -2,6 +2,37 @@
  * ai-cognition.js — 「人間にとっての計算難易度」モデル
  *
  * ============================================================
+ * 前提: 暗算ではなく「紙とペンでの手計算」
+ * ============================================================
+ * 人間のプレイヤーは紙に筆算を書いて答えを出す。CPU もそれに揃える。
+ * この前提が効くところが4つある。
+ *
+ * 1. **見直せる**（最重要）
+ *    暗算は一度間違えたら気づけないが、筆算は手が残るので検算できる。
+ *    したがって *時間を積めば正答率は上がり続ける*。
+ *    6^9 のような「手数は多いが原理的には難しくない」式は、
+ *    5分あればほぼ確実に合い、30秒ならまず間に合わない。
+ *    → accuracyUnderTime() の「見直し回数」を参照。
+ *    ただし上がり方には限度がある。検算で見つかるのは *うっかりミス* で、
+ *    手順の思い違いは何度なぞっても同じ答えになる（systematic）。
+ *
+ * 2. **遅い**
+ *    暗算より圧倒的に時間がかかる。1296×1296 の筆算は部分積を4行書いて
+ *    足すので、速い人でも30秒前後。コスト定数は筆算の実感に合わせてある。
+ *
+ * 3. **間違えにくい**
+ *    中間結果が紙に残るので、1操作あたりのミス率は暗算より一桁低い。
+ *    profile.slipRate は「筆算1操作（部分積1個 / 1桁の加算）あたり」の値。
+ *
+ * 4. **作業記憶の超過は主に時間を食う**
+ *    中間結果は紙に外部化されるので、容量を超えても答えを失うのではなく、
+ *    書いて読み直す往復が増える。よって WM 超過は
+ *    WM_TIME_PENALTY（大）と WM_ACC_PENALTY（小）に非対称に効かせる。
+ *
+ * 定数は tools/calibrate-ai.js のアンカー表に対して合わせてある。
+ * 定数をいじったら必ず `node tools/calibrate-ai.js` を通すこと。
+ *
+ * ============================================================
  * なぜ値の大きさで難易度を測ってはいけないか
  * ============================================================
  * (4+6)^9 は 6^9 より大きいが、人間にとっては圧倒的に易しい。
@@ -20,7 +51,8 @@
  * 依拠した知見
  * ============================================================
  * 1. 作業記憶容量: Miller(1956) 7±2、Cowan(2001) は「チャンク約4」。
- *    → profile.wmCapacity を 2.5〜6.5 チャンクで段階化した。
+ *    → profile.wmCapacity を 3.5〜8.0 チャンクで段階化した。
+ *      素の暗算容量より上に取ってあるのは、紙が外部記憶として働くため。
  * 2. レジスタ割り当て（Ershov 数 / Strahler 数）:
  *    式木を評価するのに必要な最小レジスタ数は、
  *      reg(葉)=1、reg(節)= 重い部分木を先に評価したときの最大同時保持数
@@ -78,17 +110,35 @@ const COG = {
   /** 人は数字を3桁ごとに束ねて覚える */
   CHUNK_DIGITS: 3,
 
-  /** 単純加算: 基本コスト / 桁あたり / 桁上がり1回あたり（秒） */
-  ADD_BASE: 0.40, ADD_PER_DIGIT: 0.30, ADD_PER_CARRY: 0.35,
+  /** 筆算の加算: 基本コスト / 桁あたり / 桁上がり1回あたり（秒） */
+  ADD_BASE: 0.60, ADD_PER_DIGIT: 0.45, ADD_PER_CARRY: 0.30,
   /** 桁上がりの発生率（一様乱数どうしの加算でおよそ 0.45） */
   CARRY_RATE: 0.45,
 
-  /** 乗算: 部分積1つあたり / 桁揃えと最終加算（秒） */
-  MUL_PER_PARTIAL: 0.75, MUL_PER_DIGIT: 0.50,
-  /** 九九（1桁×1桁）は検索 */
+  /**
+   * 筆算の乗算を、実際に紙の上でやることに分けた単価（秒）。
+   *
+   *   d1桁 × d2桁 は 部分積が d2 行。各行で d1 回の九九を引き、d1+1 桁を書く。
+   *   行が2つ以上あれば最後にそれらを足す（繰り上がり込み）。最後に答えを書く。
+   *
+   * MUL_RECALL_PER_PARTIAL は「筆算の途中で引く九九」1回ぶん。
+   * 単発で問われる九九（MUL_TABLE ≈ 1秒）より速いのは、
+   * 筆算では手順が流れに乗っていて毎回ゼロから思い出すわけではないため。
+   * ADD_PER_COLUMN は部分積を足すときの1桁ぶん（繰り上がりを含む）。
+   */
+  MUL_RECALL_PER_PARTIAL: 0.439, ADD_PER_COLUMN: 0.15,
+  /**
+   * 九九（1桁×1桁）は計算ではなく記憶からの検索。
+   * 成人が「7×8」に答えるまで約1秒（Campbell & LeFevre 2001）。ここは実測値に近い。
+   */
   MUL_TABLE: 0.80,
-  /** 有効数字1桁（10のべき等）を掛けるのは桁ずらしだけ */
-  MUL_ROUND_BASE: 1.00, MUL_ROUND_PER_DIGIT: 0.25,
+
+  /**
+   * 数字を1文字書く時間（秒）。
+   * 末尾の0を並べる、答えを清書する、といった「考えずに書くだけ」の作業に使う。
+   * 文章の書き写しは 40文字/分 程度だが、筆算の数字列は語を読み解く必要がないぶん速い。
+   */
+  WRITE_PER_DIGIT: 0.517,
 
   /** 事実検索1回のコスト */
   RECALL: 0.80,
@@ -106,8 +156,12 @@ const COG = {
   /** 演算子ごとの作業記憶スロット（設計指示の表をそのまま採用） */
   OP_WM: { '+': 2, '*': 2, '^': 3, '!': 2, 'P': 4, '↑↑': 4 },
 
-  /** WM が容量を超えたときの時間・正答率へのペナルティ */
-  WM_TIME_PENALTY: 0.45, WM_ACC_PENALTY: 0.40,
+  /**
+   * WM が容量を超えたときのペナルティ。
+   * 紙があるので「答えを失う」のではなく「書いて読み直す往復が増える」。
+   * よって時間には強く、正答率には弱く効かせる（暗算モデルとの最大の違いの1つ）。
+   */
+  WM_TIME_PENALTY: 0.55, WM_ACC_PENALTY: 0.10,
 
   /** 所要時間のばらつき（対数正規の σ）。人の作業時間はおおむね対数正規 */
   TIME_SIGMA: 0.35,
@@ -115,11 +169,43 @@ const COG = {
   RUSH_THRESHOLD: 1.40,
   RUSH_STRENGTH: 1.60,
 
-  /** 数式を決めて計算に取りかかるまでの段取り時間（秒） */
-  PLANNING_TIME: 6.0,
+  /**
+   * 式を組み立てる操作（カードを1枚ずつ置く）にかかる時間（秒）。
+   *
+   *   SETUP_BASE + SETUP_PER_CARD × 置く枚数
+   *
+   * 計算そのものではなく **画面の操作**なので、計算の速さ（profile.speed）では
+   * 割らない — 競技者だからカードを1.6倍速くドラッグできるわけではない。
+   * 括弧は常設ツールから取るだけなので半分の重みで数える。
+   *
+   * 標準的な4枚の式でちょうど 10秒 になるように置いてある:
+   *   2枚 7.7秒 ／ 3枚 8.8秒 ／ 4枚 9.9秒 ／ 5枚 11.0秒 ／ 5枚＋括弧2つ 12.1秒
+   *
+   * 答えの桁数に比例する入力時間は WRITE_PER_DIGIT で別に計上する。
+   */
+  SETUP_BASE: 5.5, SETUP_PER_CARD: 1.1,
 
-  /** 正答率の上下限。1（=100%正解）には決してしない */
-  P_MAX: 0.98, P_MIN: 0.005,
+  // ---- 検算（手計算モデルの中核）----
+
+  /** 見直し1回にかかる時間は、初回計算の何倍か（同じ手順をなぞるので速い） */
+  RECHECK_FACTOR: 0.526,
+  /** これ以上見直しても集中力が持たない */
+  MAX_RECHECKS: 12,
+  /**
+   * 初回の誤りのうち「検算しても再現してしまう」割合。
+   *
+   * 検算で見つかるのは *うっかりミス*（桁を1つ書き落とした等）だけ。
+   * 手順そのものを取り違えていたら、何度なぞっても同じ答えになる。
+   * 難しい問題ほど後者の比率が上がるので、難易度スカラーの1次式で与える。
+   */
+  SYSTEMATIC_BASE: 0.22, SYSTEMATIC_SLOPE: 0.756,
+
+  /**
+   * 正答率の上下限。1（=100%正解）には決してしない。
+   * 手計算では「9×8 を5分かけて検算する」が 0.999 に達しうるので、
+   * 暗算前提の 0.98 では上が詰まる。
+   */
+  P_MAX: 0.999, P_MIN: 0.005,
 
   /**
    * 厳密(exact)以外のモードの正答率。
@@ -144,55 +230,66 @@ const COG = {
 // AIレベル（プロファイル）
 // ============================================================
 //
-//  wmCapacity     : 同時に保持できるチャンク数（Cowan の 4 が標準的な大人）
-//  speed          : 基準人を 1.0 とした処理速度
+//  wmCapacity     : 同時に保持できるチャンク数。紙に書けるぶん暗算より大きい
+//  speed          : 基準人（大学生）を 1.0 とした筆算の速度。
+//                   手を動かす速さなので、暗算ほど個人差が開かない
 //  logDecimals    : log10 をどれだけの小数桁で覚えているか
 //  factKnown      : n! を暗記している上限の n
-//  chainExponent  : a^9=(a^3)^3 のような効率的なべき乗手順を使えるか
+//  chainExponent  : a^9=((a^2)^2)^2·a のような効率的なべき乗手順を使えるか
 //  knowsStirling  : 巨大な階乗の桁数を見積もれるか
-//  knowsPowerTable: 2^n, 3^n などのべき表を持っているか
-//  slipRate       : 基本操作1回あたりのうっかりミス率
+//  powerTable     : 暗記しているべき乗の範囲 { 2:2^nまで, 3:3^nまで, other:1桁の底は^nまで }
+//  slipRate       : 筆算1操作（部分積1個 / 1桁の加算）あたりのミス率
+//  checkRate      : 検算1回でうっかりミスに気づく確率  ← 手計算モデルの要
 //  stressTolerance: 時間切迫下でも手順を崩さない度合い（0..1）
-//  baseAccuracy   : 上限正答率（写し間違い等の下限ノイズ）
+//  baseAccuracy   : 上限正答率（清書時の写し間違い等、検算でも取れない下限ノイズ）
 //  aggression     : ベットの強気さ
 //  bluffRate      : 弱いハンドでも仕掛ける頻度
 //  riskAppetite   : 「大きいが当てにくい式」をどれだけ選びたがるか
+//
+// slipRate は「4桁×4桁の筆算1回を初回で間違える確率」から逆算してある。
+// 部分積+最終加算で 20 操作なので slipRate = 1 − (1 − p4x4)^(1/20)。
+//   中学生 30% / 高校生 18% / 大学生 10% / 競技者 6% / トップ 3.5%
+//
+// factKnown は「暗記している階乗」。ここを超える階乗は順に掛け算して求める。
+// 大学生でも 5! = 120 までとしているのは、7! を
+//   7×6=42, 5×4=20, 3×2=6 → 840 → ×6 = 5040
+// のように *その場で作る* のが実態だから（記憶から引くなら一瞬で終わってしまう）。
 
 const AI_PROFILES = {
   novice: {
-    id: 'novice', name: '見習い', label: '初級',
-    wmCapacity: 2.5, speed: 0.70, logDecimals: 1, factKnown: 5,
-    chainExponent: false, knowsStirling: false, knowsPowerTable: false,
-    exactDigitCap: 6, slipRate: 0.030, stressTolerance: 0.30,
-    baseAccuracy: 0.90, aggression: 0.55, bluffRate: 0.05, riskAppetite: 0.25,
+    id: 'novice', name: '中学生', label: '初級',
+    wmCapacity: 3.5, speed: 0.72, logDecimals: 1, factKnown: 1,
+    chainExponent: false, knowsStirling: false, powerTable: { 2: 5, 3: 3, other: 2 },
+    exactDigitCap: 12, slipRate: 0.01768, checkRate: 0.35, stressTolerance: 0.30,
+    baseAccuracy: 0.988, aggression: 0.55, bluffRate: 0.05, riskAppetite: 0.25,
   },
   casual: {
-    id: 'casual', name: '常連', label: '中級',
-    wmCapacity: 3.2, speed: 0.90, logDecimals: 2, factKnown: 6,
-    chainExponent: false, knowsStirling: false, knowsPowerTable: true,
-    exactDigitCap: 8, slipRate: 0.022, stressTolerance: 0.50,
-    baseAccuracy: 0.94, aggression: 0.80, bluffRate: 0.10, riskAppetite: 0.40,
+    id: 'casual', name: '高校生', label: '中級',
+    wmCapacity: 4.5, speed: 0.88, logDecimals: 2, factKnown: 1,
+    chainExponent: false, knowsStirling: false, powerTable: { 2: 10, 3: 4, other: 2 },
+    exactDigitCap: 18, slipRate: 0.00987, checkRate: 0.48, stressTolerance: 0.45,
+    baseAccuracy: 0.994, aggression: 0.80, bluffRate: 0.10, riskAppetite: 0.40,
   },
   skilled: {
-    id: 'skilled', name: '計算屋', label: '上級',
-    wmCapacity: 4.0, speed: 1.15, logDecimals: 3, factKnown: 8,
-    chainExponent: true, knowsStirling: true, knowsPowerTable: true,
-    exactDigitCap: 12, slipRate: 0.015, stressTolerance: 0.70,
-    baseAccuracy: 0.96, aggression: 1.00, bluffRate: 0.15, riskAppetite: 0.55,
+    id: 'skilled', name: '大学生（理系）', label: '上級',
+    wmCapacity: 5.5, speed: 1.00, logDecimals: 3, factKnown: 1,
+    chainExponent: true, knowsStirling: true, powerTable: { 2: 12, 3: 5, other: 3 },
+    exactDigitCap: 26, slipRate: 0.00525, checkRate: 0.62, stressTolerance: 0.60,
+    baseAccuracy: 0.9965, aggression: 1.00, bluffRate: 0.15, riskAppetite: 0.55,
   },
   expert: {
-    id: 'expert', name: '暗算名人', label: '達人',
-    wmCapacity: 5.0, speed: 1.50, logDecimals: 4, factKnown: 10,
-    chainExponent: true, knowsStirling: true, knowsPowerTable: true,
-    exactDigitCap: 16, slipRate: 0.010, stressTolerance: 0.85,
-    baseAccuracy: 0.975, aggression: 1.15, bluffRate: 0.20, riskAppetite: 0.70,
+    id: 'expert', name: '競技者', label: '達人',
+    wmCapacity: 6.5, speed: 1.30, logDecimals: 4, factKnown: 4,
+    chainExponent: true, knowsStirling: true, powerTable: { 2: 16, 3: 7, other: 3 },
+    exactDigitCap: 34, slipRate: 0.00309, checkRate: 0.74, stressTolerance: 0.78,
+    baseAccuracy: 0.9985, aggression: 1.15, bluffRate: 0.20, riskAppetite: 0.70,
   },
   master: {
-    id: 'master', name: 'グランドマスター', label: '超人',
-    wmCapacity: 6.5, speed: 2.00, logDecimals: 5, factKnown: 12,
-    chainExponent: true, knowsStirling: true, knowsPowerTable: true,
-    exactDigitCap: 20, slipRate: 0.006, stressTolerance: 0.95,
-    baseAccuracy: 0.985, aggression: 1.30, bluffRate: 0.22, riskAppetite: 0.85,
+    id: 'master', name: 'トップ競技者', label: '超人',
+    wmCapacity: 8.0, speed: 1.60, logDecimals: 5, factKnown: 6,
+    chainExponent: true, knowsStirling: true, powerTable: { 2: 20, 3: 9, other: 4 },
+    exactDigitCap: 44, slipRate: 0.00178, checkRate: 0.82, stressTolerance: 0.90,
+    baseAccuracy: 0.9993, aggression: 1.30, bluffRate: 0.22, riskAppetite: 0.85,
   },
 };
 
@@ -276,9 +373,24 @@ function isRoundValue(v) {
   return significantDigits(v) <= 1 && digitsOfValue(v) >= 2;
 }
 
-/** 桁ずらしの近道が使えるオペランドか */
-function shiftable(digits, sig) {
-  return sig <= 1 && digits >= 2;
+/**
+ * 末尾に並ぶ0の個数。
+ *
+ * 手計算では **末尾の0は計算せず、あとから書き足すだけ** で済む。
+ *   1296 × 2000 → 1296 × 2 を筆算して 0 を3個足す
+ *   30^7        → 3^7 = 2187 を求めて 0 を7個足す
+ *   10^9        → 有効数字が 1 なので計算そのものが消え、0 を9個書くだけ
+ * 最後のケースだけが「計算ではなく書き取り」になる。ここを取り違えると
+ * 30^7 のような式が 10^7 と同じ値段になり、ゲームとして破綻する。
+ */
+function trailingZeros(digits, sig) {
+  const s = Math.min(Math.max(1, sig), digits);
+  return Math.max(0, digits - s);
+}
+
+/** 有効数字だけを取り出したときの桁数 */
+function coreDigits(digits, sig) {
+  return Math.min(Math.max(1, sig), digits);
 }
 
 /**
@@ -295,13 +407,20 @@ function chunksOfValue(v) {
   return c;
 }
 
-/** 既知のべき乗（検索で済む）か */
+/**
+ * 既知のべき乗（計算せず検索で済む）か。
+ * 覚えている範囲はレベルごとに違う。3^7 = 2187 まで即答できるのは競技者以上で、
+ * 大学生なら 3^5 = 243 あたりで止まる、という切り分け。
+ */
+const DEFAULT_POWER_TABLE = { 2: 4, 3: 2, other: 2 };
+
 function isKnownPower(base, exp, profile) {
-  if (!profile.knowsPowerTable) return exp <= 2 && base <= 9;
-  if (base === 10) return true;
-  if (base === 2) return exp <= 16;
-  if (base === 3) return exp <= 7;
-  if (base <= 9) return exp <= 3;
+  if (base === 1) return true;
+  if (base === 10) return true;                 // 10^n は「1のあとに0」
+  const t = profile.powerTable || DEFAULT_POWER_TABLE;
+  if (base === 2) return exp <= t[2];
+  if (base === 3) return exp <= t[3];
+  if (base <= 9) return exp <= (t.other || 2);
   return exp <= 2 && base <= 30;
 }
 
@@ -322,20 +441,65 @@ function riskAdd(d1, d2, profile) {
   return 1 - Math.pow(1 - profile.slipRate * 0.5, events);
 }
 
-function costMul(d1, d2, sig1, sig2, profile) {
-  // どちらかが「末尾0の数」なら桁ずらしで済む
-  if (shiftable(d1, sig1) || shiftable(d2, sig2)) {
-    return COG.MUL_ROUND_BASE + COG.MUL_ROUND_PER_DIGIT * (d1 + d2);
+/**
+ * 筆算の乗算を、紙の上で実際にやる手順に分解する。
+ *
+ * 合計を返すだけでなく手順の内訳も返すので、テスト場で
+ * 「36×6 の行に何秒、繰り上がりの処理に何秒」まで表示できる。
+ *
+ * @param {object} [opts] {aStr, bStr, resultDigits} 分かっていれば表示に使う
+ * @returns {{total:number, parts:Array<{label:string,time:number}>}}
+ */
+function mulBreakdown(d1, d2, sig1, sig2, profile, opts) {
+  const o = opts || {};
+  const m1 = coreDigits(d1, sig1), m2 = coreDigits(d2, sig2);
+  const zeros = trailingZeros(d1, sig1) + trailingZeros(d2, sig2);
+  const parts = [];
+  const push = (label, time) => { if (time > 1e-9) parts.push({ label, time }); };
+
+  // 桁数の多い方を上に置くと部分積の行数が減る。人は自然にそうする。
+  const top = Math.max(m1, m2), bottom = Math.min(m1, m2);
+  const resultDigits = o.resultDigits || (top + bottom);
+
+  if (top === 1 && bottom === 1) {
+    push(`九九「${o.aStr || `${d1}桁`} × ${o.bStr || `${d2}桁`}」を思い出す`, COG.MUL_TABLE);
+  } else {
+    for (let i = 0; i < bottom; i++) {
+      const digitLabel = i === 0 ? '一の位' : `${'十百千万'[Math.min(i - 1, 3)]}の位`;
+      push(
+        `部分積 ${i + 1}行目（${digitLabel}を掛ける）: 九九を ${top} 回 ＋ ${top + 1} 桁を書く`,
+        top * COG.MUL_RECALL_PER_PARTIAL + (top + 1) * COG.WRITE_PER_DIGIT
+      );
+    }
+    if (bottom > 1) {
+      push(
+        `${bottom} 行の部分積を足す（${resultDigits} 桁ぶんの繰り上がり処理）`,
+        resultDigits * (bottom - 1) * COG.ADD_PER_COLUMN
+      );
+    }
   }
-  if (d1 === 1 && d2 === 1) return COG.MUL_TABLE;              // 九九は検索
-  return COG.MUL_PER_PARTIAL * d1 * d2 + COG.MUL_PER_DIGIT * (d1 + d2);
+  push(`答えの ${resultDigits} 桁を書く`, resultDigits * COG.WRITE_PER_DIGIT);
+  if (zeros > 0) push(`末尾に0を ${zeros} 個書き足す`, zeros * COG.WRITE_PER_DIGIT);
+
+  return { total: parts.reduce((s, p) => s + p.time, 0), parts };
+}
+
+function costMul(d1, d2, sig1, sig2, profile) {
+  return mulBreakdown(d1, d2, sig1, sig2, profile).total;
 }
 
 function riskMul(d1, d2, sig1, sig2, profile) {
-  if (shiftable(d1, sig1) || shiftable(d2, sig2)) return profile.slipRate * 0.3; // 0の数え違い
-  if (d1 === 1 && d2 === 1) return profile.slipRate * 0.5;     // 九九の検索ミス
-  // 部分積 d1*d2 個 + それらの加算（problem-size effect）
-  return 1 - Math.pow(1 - profile.slipRate, d1 * d2 + Math.max(d1, d2));
+  const m1 = coreDigits(d1, sig1), m2 = coreDigits(d2, sig2);
+  const zeros = trailingZeros(d1, sig1) + trailingZeros(d2, sig2);
+  // 0の個数を数え違えるリスクは、本体の計算とは別に乗る
+  const zeroRisk = zeros > 0 ? profile.slipRate * 0.3 : 0;
+
+  const core = (m1 === 1 && m2 === 1)
+    ? profile.slipRate * 0.5                                   // 九九の検索ミス
+    // 部分積 m1*m2 個 + それらの加算（problem-size effect）
+    : 1 - Math.pow(1 - profile.slipRate, m1 * m2 + Math.max(m1, m2));
+
+  return 1 - (1 - clamp01(core)) * (1 - zeroRisk);
 }
 
 /**
@@ -343,22 +507,27 @@ function riskMul(d1, d2, sig1, sig2, profile) {
  * chainExponent を持つプロファイルは a^9=(a^3)^3 のような
  * 加算連鎖（square & multiply）を使えるので手数が激減する。
  */
-function powerExactSteps(log10Base, exp, profile) {
+function powerExactSteps(log10Base, exp, profile, baseLabel) {
   const steps = [];
   const dg = (k) => Math.max(1, Math.floor(k * log10Base) + 1);
+  const b = baseLabel || 'a';
+  const p = (k) => (k === 1 ? b : `${b}^${k}`);
 
   if (profile.chainExponent) {
     const bits = exp.toString(2);
     let cur = 1;
     for (let i = 1; i < bits.length; i++) {
-      steps.push([dg(cur), dg(cur)]);
+      steps.push([dg(cur), dg(cur), `${p(cur)} × ${p(cur)} = ${p(cur * 2)}`, p(cur), p(cur)]);
       cur *= 2;
-      if (bits[i] === '1') { steps.push([dg(cur), dg(1)]); cur += 1; }
+      if (bits[i] === '1') {
+        steps.push([dg(cur), dg(1), `${p(cur)} × ${b} = ${p(cur + 1)}`, p(cur), b]);
+        cur += 1;
+      }
       if (steps.length > 64) break;
     }
   } else {
     const n = Math.min(exp - 1, 64);
-    for (let k = 1; k <= n; k++) steps.push([dg(k), dg(1)]);
+    for (let k = 1; k <= n; k++) steps.push([dg(k), dg(1), `${p(k)} × ${b} = ${p(k + 1)}`, p(k), b]);
   }
   return steps;
 }
@@ -453,7 +622,7 @@ function applyBinary(op, l, r, profile, ctx, switches) {
 
   const step = useLog
     ? binaryLogStep(op, l, r, profile)
-    : binaryExactStep(op, l, r, profile, value);
+    : binaryExactStep(op, l, r, profile, value, ctx);
 
   out.time += step.time;
   out.ok *= (1 - step.risk);
@@ -486,48 +655,109 @@ function shouldUseLog(value, profile, ctx) {
   return digitsOfValue(value) > profile.exactDigitCap;
 }
 
+// ============================================================
+// 計算過程の記録（テスト場で「何にどれだけ費やしたか」を見るため）
+// ============================================================
+//
+// analyzeNode の再帰は「合計何秒か」しか返さないので、
+// 途中でどんな筆算を何回やったのかが外から見えない。
+// ctx.trace に1手ずつ積んでおくと、テスト場で内訳を出せる。
+//
+// ここで積むのは *基準人の生の秒数*。速度・演算子切替・作業記憶超過の
+// 補正は最後にまとめて掛けるので、_analyzeFormulaUncached で同じ倍率を通す。
+
+function step(ctx, kind, label, time, risk, children) {
+  if (ctx && ctx.trace) {
+    ctx.trace.push({ kind, label, time, risk: clamp01(risk || 0), children: children || null });
+  }
+}
+
+/**
+ * 掛け算を1手として記録する。手順の内訳（部分積の行・繰り上がり・書き取り）を
+ * 子として持たせるので、テスト場で開いて中身を見られる。
+ */
+function mulStep(ctx, profile, d1, d2, sig1, sig2, label, opts) {
+  const bd = mulBreakdown(d1, d2, sig1, sig2, profile, opts);
+  const risk = riskMul(d1, d2, sig1, sig2, profile);
+  step(ctx, 'mul', label, bd.total, risk,
+    bd.parts.map((p) => ({ kind: 'detail', label: p.label, time: p.time, risk: 0 })));
+  return { time: bd.total, risk };
+}
+
+/**
+ * 式を組むのに何枚置くかを数える。
+ *
+ * 数字・演算子は手札から1枚ずつドラッグする。括弧は常設ツールから取るだけで
+ * 枚数制限にも入らないので、操作の手間としては半分に見積もる。
+ */
+function countLayout(node) {
+  let cards = 0, parens = 0;
+  const walk = (n) => {
+    if (!n) return;
+    switch (n.type) {
+      case 'number': cards += 1; break;
+      case 'group': parens += 2; walk(n.inner); break;   // ( と ) の2枚を置く
+      case 'unary': cards += 1; walk(n.operand); break;
+      case 'binary': cards += 1; walk(n.left); walk(n.right); break;
+      default: break;
+    }
+  };
+  try { walk(node); } catch (e) { /* 数えられなければ 0 のまま */ }
+  return { cards, parens, weight: cards + parens * 0.5 };
+}
+
+/** 値を短く表示する（記録のラベル用） */
+function briefValue(v) {
+  if (v === null || v === undefined) return '?';
+  if (typeof v === 'number' || typeof v === 'bigint') {
+    const s = v.toString();
+    return s.length <= 12 ? s : `${s.slice(0, 8)}…(${s.length}桁)`;
+  }
+  try {
+    if (v.kind === 'exact') return briefValue(v.v);
+    return v.toString();
+  } catch (e) { return '?'; }
+}
+
 // ---------- 厳密流儀 ----------
 
-function binaryExactStep(op, l, r, profile, value) {
+function binaryExactStep(op, l, r, profile, value, ctx) {
   const d1 = Math.min(digitsOfValue(l.value), 4000);
   const d2 = Math.min(digitsOfValue(r.value), 4000);
   const s1 = significantDigits(l.value);
   const s2 = significantDigits(r.value);
 
-  switch (op) {
-    case '+':
-      return { time: costAdd(d1, d2, profile), risk: riskAdd(d1, d2, profile), sigma: 0 };
+  const pair = `${briefValue(l.value)} ${op === '*' ? '×' : op} ${briefValue(r.value)}`;
 
-    case '*':
-      return { time: costMul(d1, d2, s1, s2, profile), risk: riskMul(d1, d2, s1, s2, profile), sigma: 0 };
+  switch (op) {
+    case '+': {
+      const t = costAdd(d1, d2, profile), risk = riskAdd(d1, d2, profile);
+      step(ctx, 'add', `${pair} を足す`, t, risk);
+      return { time: t, risk, sigma: 0 };
+    }
+
+    case '*': {
+      const r0 = mulStep(ctx, profile, d1, d2, s1, s2,
+        `${pair} を筆算する`,
+        { aStr: briefValue(l.value), bStr: briefValue(r.value), resultDigits: digitsOfValue(value) });
+      return { time: r0.time, risk: r0.risk, sigma: 0 };
+    }
 
     case '^':
-      return powerExactStep(l, r, profile, d1, s1);
+      return powerExactStep(l, r, profile, d1, s1, ctx);
 
     case 'P':
-      return permutationExactStep(l, r, profile);
+      return permutationExactStep(l, r, profile, ctx);
 
     case '↑↑':
-      return tetrationExactStep(l, r, profile);
+      return tetrationExactStep(l, r, profile, ctx);
   }
   return { time: 5, risk: 0.1, sigma: 0 };
 }
 
-function powerExactStep(l, r, profile, baseDigits, baseSig) {
+function powerExactStep(l, r, profile, baseDigits, baseSig, ctx) {
   const base = exactSmallInt(l.value);
   const exp = exactSmallInt(r.value);
-
-  // 底が末尾0の数（10, 20, 100…）→ 結果は「1のあとに0をN個」。
-  // これが (4+6)^9 が 6^9 より圧倒的に易しい理由。計算ではなく書き取りになる。
-  if (shiftable(baseDigits, baseSig) && exp !== null) {
-    const resultDigits = Math.min(digitsOfValue(l.value.power(r.value)), 100000);
-    return {
-      time: COG.RECALL + 0.15 * Math.min(resultDigits, 200),
-      // 0の数を数え違えるリスクだけが残る
-      risk: clamp01(profile.slipRate * 0.4 + 0.0015 * Math.min(resultDigits, 400)),
-      sigma: 0,
-    };
-  }
 
   if (exp === null || exp > 4096) {
     // 指数が巨大 → 厳密には不可能。時間を発散させて自然に選ばれなくする。
@@ -536,38 +766,80 @@ function powerExactStep(l, r, profile, baseDigits, baseSig) {
   if (exp === 0) return { time: COG.RECALL, risk: profile.slipRate * 0.2, sigma: 0 };
   if (exp === 1) return { time: 0.2, risk: 0, sigma: 0 };
 
-  if (base !== null && isKnownPower(base, exp, profile)) {
-    return { time: COG.RECALL * 1.5, risk: profile.slipRate * 0.6, sigma: 0 };
+  // ---- 底を「有効数字の部分 × 10^k」に分解する ----
+  //
+  //   a = m × 10^k  のとき  a^b = m^b × 10^(k·b)
+  //
+  // 末尾の 0 は k·b 個を書き足すだけで済む。実際に計算するのは m^b のほう。
+  //   10^9 → m=1 なので計算が消え、0 を9個書くだけ  ← (4+6)^9 が易しい理由
+  //   30^7 → m=3 なので 3^7 = 2187 を求めたうえで 0 を7個   ← ここを飛ばしてはいけない
+  const trail = trailingZeros(baseDigits, baseSig);
+  const zeroCount = Math.min(trail * exp, 100000);
+  const zeroWrite = COG.WRITE_PER_DIGIT * Math.min(zeroCount, 400);
+  const zeroRisk = trail > 0
+    ? clamp01(profile.slipRate * 0.4 + 0.0015 * Math.min(zeroCount, 400))
+    : 0;
+  const withZeros = (t, risk) => {
+    if (trail > 0) {
+      step(ctx, 'write', `末尾に0を ${zeroCount} 個書き足す`, zeroWrite, zeroRisk);
+    }
+    return {
+      time: Math.min(t + zeroWrite, COG.MAX_TIME),
+      risk: 1 - (1 - clamp01(risk)) * (1 - zeroRisk),
+      sigma: 0,
+    };
+  };
+
+  // m（有効数字の部分）。底が大きすぎて整数化できないときは log から扱う。
+  const log10Core = l.value.getLog10() - trail;
+  const core = (base !== null && trail > 0)
+    ? Math.round(base / Math.pow(10, trail))
+    : base;
+
+  // m = 1 → 10 の冪。計算は無く、0 を並べる書き取りだけになる
+  if (core === 1) {
+    step(ctx, 'recall', `10 の冪だと気づく（計算は不要）`, COG.RECALL, 0);
+    return withZeros(COG.RECALL, 0);
   }
 
-  const log10Base = l.value.getLog10();
-  const steps = powerExactSteps(log10Base, exp, profile);
+  if (core !== null && isKnownPower(core, exp, profile)) {
+    step(ctx, 'recall', `${core}^${exp} = ${briefValue(Math.pow(core, exp))} を暗記から引く`,
+      COG.RECALL * 1.5, profile.slipRate * 0.6);
+    return withZeros(COG.RECALL * 1.5, profile.slipRate * 0.6);
+  }
+
+  const baseLabel = core !== null ? String(core) : 'a';
+  const steps = powerExactSteps(log10Core, exp, profile, baseLabel);
+  step(ctx, 'other', 'べき乗をどう分解するか決める', 1.0, 0);
   let time = 1.0, ok = 1;
-  for (const [a, b] of steps) {
+  for (const [a, b, label, aStr, bStr] of steps) {
     const da = Math.min(a, 4000), db = Math.min(b, 4000);
-    time += costMul(da, db, 9, 9, profile);
-    ok *= (1 - riskMul(da, db, 9, 9, profile));
+    const r0 = mulStep(ctx, profile, da, db, 9, 9, `${label}（${da}桁×${db}桁）`, { aStr, bStr });
+    time += r0.time;
+    ok *= (1 - r0.risk);
     if (time > COG.MAX_TIME) break;
   }
-  return {
-    time: Math.min(time, COG.MAX_TIME), risk: 1 - ok, sigma: 0,
-    wmExtra: Math.min(2.0, 0.35 * steps.length),
-  };
+  const out = withZeros(time, 1 - ok);
+  out.wmExtra = Math.min(2.0, 0.35 * steps.length);
+  return out;
 }
 
-function permutationExactStep(l, r, profile) {
+function permutationExactStep(l, r, profile, ctx) {
   const n = exactSmallInt(l.value);
   const rr = exactSmallInt(r.value);
   if (n === null || rr === null || rr > 64) {
     return { time: COG.MAX_TIME, risk: 0.99, sigma: 0 };
   }
   // nPr = n(n-1)...(n-r+1)。r-1 回の乗算 + 「どこまで掛けたか」の管理
+  step(ctx, 'other', `${n}P${rr} を ${n}×${n - 1}×… と書き下す`, 2.0, 0);
   let time = 2.0, ok = 1;
   let curDigits = String(n).length;
   const termDigits = String(Math.max(1, n)).length;
   for (let i = 1; i < rr; i++) {
-    time += costMul(curDigits, termDigits, 9, 9, profile);
-    ok *= (1 - riskMul(curDigits, termDigits, 9, 9, profile));
+    const r0 = mulStep(ctx, profile, curDigits, termDigits, 9, 9,
+      `途中の積 × ${n - i}（${curDigits}桁×${termDigits}桁）`);
+    time += r0.time;
+    ok *= (1 - r0.risk);
     curDigits += termDigits;
     if (time > COG.MAX_TIME) break;
   }
@@ -579,7 +851,7 @@ function permutationExactStep(l, r, profile) {
   };
 }
 
-function tetrationExactStep(l, r, profile) {
+function tetrationExactStep(l, r, profile, ctx) {
   const b = exactSmallInt(l.value);
   const h = exactSmallInt(r.value);
   // ここに来るのは許可パターンのみ
@@ -588,15 +860,23 @@ function tetrationExactStep(l, r, profile) {
   const conceptCost = 3.0;   // 「↑↑ とは何か」を思い出して展開するコスト
   if (h === 2) {
     // b↑↑2 = b^b
+    step(ctx, 'recall', `${b}↑↑2 = ${b}^${b} と展開する`, conceptCost, 0);
     const st = powerExactStep(l, { value: _HN.of(b) }, profile,
-      digitsOfValue(l.value), significantDigits(l.value));
+      digitsOfValue(l.value), significantDigits(l.value), ctx);
     return { time: st.time + conceptCost, risk: st.risk, sigma: 0, wmExtra: st.wmExtra };
   }
-  if (b === 2 && h === 3) return { time: conceptCost + 1.0, risk: profile.slipRate, sigma: 0 };   // 16
-  if (b === 2 && h === 4) return { time: conceptCost + 2.0, risk: profile.slipRate, sigma: 0 };   // 65536
+  if (b === 2 && h === 3) {
+    step(ctx, 'recall', '2↑↑3 = 2^4 = 16 を出す', conceptCost + 1.0, profile.slipRate);
+    return { time: conceptCost + 1.0, risk: profile.slipRate, sigma: 0 };
+  }
+  if (b === 2 && h === 4) {
+    step(ctx, 'recall', '2↑↑4 = 2^16 = 65536 を出す', conceptCost + 2.0, profile.slipRate);
+    return { time: conceptCost + 2.0, risk: profile.slipRate, sigma: 0 };
+  }
   if (b === 3 && h === 3) {
     // 3^27 = 7625597484987 —（3^3)^9 か 3^27 の直接計算
-    const st = powerExactStep({ value: _HN.of(3) }, { value: _HN.of(27) }, profile, 1, 1);
+    step(ctx, 'recall', '3↑↑3 = 3^27 と展開する', conceptCost, 0);
+    const st = powerExactStep({ value: _HN.of(3) }, { value: _HN.of(27) }, profile, 1, 1, ctx);
     return { time: st.time + conceptCost, risk: st.risk, sigma: 0, wmExtra: st.wmExtra };
   }
   return { time: COG.MAX_TIME, risk: 0.99, sigma: 0 };
@@ -621,17 +901,52 @@ function applyFactorial(child, profile, ctx, isSwitch) {
       out.time += COG.MAX_TIME; out.ok = 0; return out;
     }
     if (n <= profile.factKnown) {
+      step(ctx, 'recall', `${n}! = ${briefValue(factorialApprox(n))} を暗記から引く`,
+        COG.RECALL, profile.slipRate * 0.5);
       out.time += COG.RECALL; out.ok *= (1 - profile.slipRate * 0.5); return out;
     }
-    // factKnown からの続き: (factKnown+1) 〜 n を順に掛ける
+    // ---- factKnown からの続きを実際に掛けていく ----
+    //
+    // 掛ける順番で手間がまるで違う。7! を例にすると
+    //   順に掛ける : 1×2, ×3, ×4, ×5, ×6, ×7  → 最後は 3桁×1桁 まで育つ
+    //   小さい順に畳む: 2×3=6, 4×5=20, 6×7=42 → 6×20=120 → 120×42=5040
+    // 後者は「小さい数どうしの九九」を先に済ませるので、多桁の筆算が1回で済む。
+    // 効率的な手順を知っている人（chainExponent）は後者を使う。
+    step(ctx, 'other', 'どこから掛け始めるか決める', 1.0, 0);
     let t = 1.0, ok = 1;
-    let curDigits = String(factorialApprox(profile.factKnown)).length;
-    for (let i = profile.factKnown + 1; i <= n; i++) {
-      const td = String(i).length;
-      t += costMul(curDigits, td, 9, 9, profile);
-      ok *= (1 - riskMul(curDigits, td, 9, 9, profile));
-      curDigits += td;
-      if (t > COG.MAX_TIME) break;
+    const mul = (a, b) => {
+      const sa = a.toString(), sb = b.toString();
+      const da = sa.length, db = sb.length;
+      const siga = sa.replace(/0+$/, '').length || 1;
+      const sigb = sb.replace(/0+$/, '').length || 1;
+      const next = a * b;
+      const r0 = mulStep(ctx, profile, da, db, siga, sigb,
+        `${briefValue(a)} × ${briefValue(b)} = ${briefValue(next)}`,
+        { aStr: briefValue(a), bStr: briefValue(b), resultDigits: next.toString().length });
+      t += r0.time; ok *= (1 - r0.risk);
+      return next;
+    };
+
+    let terms = [];
+    for (let i = profile.factKnown + 1; i <= n; i++) terms.push(BigInt(i));
+    if (profile.factKnown > 1) terms.unshift(BigInt(factorialApprox(profile.factKnown)));
+
+    if (profile.chainExponent) {
+      // 隣どうしを掛けて畳む。小さい数どうしから片づくので多桁の筆算が減る
+      while (terms.length > 1 && t < COG.MAX_TIME) {
+        const next = [];
+        for (let i = 0; i < terms.length; i += 2) {
+          if (i + 1 >= terms.length) { next.push(terms[i]); continue; }
+          next.push(mul(terms[i], terms[i + 1]));
+        }
+        terms = next;
+      }
+    } else {
+      let running = terms.shift() || 1n;
+      for (const term of terms) {
+        running = mul(running, term);
+        if (t > COG.MAX_TIME) break;
+      }
     }
     out.time += Math.min(t, COG.MAX_TIME);
     out.ok *= ok;
@@ -770,7 +1085,7 @@ function _analyzeFormulaUncached(formula, profile) {
   } catch (e) { return failed(src, e.message); }
 
   const answerMode = _FE.declarationMode(value);
-  const ctx = { answerMode };
+  const ctx = { answerMode, trace: [] };
 
   let root;
   try {
@@ -779,9 +1094,16 @@ function _analyzeFormulaUncached(formula, profile) {
 
   const notes = [];
 
+  // ---- 答えの入力 ----
+  // 求まった値を答案として打ち込む時間。厳密モードでは全桁必要なので、
+  // 「どこまで大きい数を狙えるか」の実効的な上限は最終的にここで決まる。
+  const answerDigits = answerMode === 'exact'
+    ? Math.min(digitsOfValue(value), 4000) : 0;
+  const transcribe = COG.WRITE_PER_DIGIT * (isFinite(answerDigits) ? answerDigits : 0);
+
   // ---- 演算子切替コスト（Monsell 2003）----
   const switches = root.switches;
-  let time = root.time * (1 + 0.12 * switches) + COG.PLANNING_TIME;
+  let time = root.time * (1 + 0.12 * switches);
   time = time / profile.speed;
   time = Math.min(time, COG.MAX_TIME);
   if (switches > 0) notes.push(`演算子の切替 ${switches} 回`);
@@ -793,6 +1115,49 @@ function _analyzeFormulaUncached(formula, profile) {
     time *= (1 + COG.WM_TIME_PENALTY * wmOverload);
     notes.push(`作業記憶が ${wmOverload.toFixed(1)} チャンク超過`);
   }
+
+  // ---- 手順ごとの内訳を、最終的な秒数と辻褄が合うように整える ----
+  //
+  // ctx.trace には基準人の生の秒数が入っている。ここまでに掛けた倍率
+  // （切替 / 速度 / WM超過）を同じだけ通して、合計が計算時間に一致するようにする。
+  // 3段の入れ子にして返す:
+  //   式操作 / 計算 / 答えの入力
+  //     計算 → 演算1つずつ
+  //             → 部分積の行・繰り上がり・書き取り
+  const calcTime = time;
+  const traceScale = root.time > 0 ? calcTime / root.time : 0;
+  const scaleStep = (s) => ({
+    ...s,
+    time: s.time * traceScale,
+    children: s.children ? s.children.map(scaleStep) : null,
+  });
+
+  // ---- 式を組む操作 ----
+  // 置くカードが多いほど手間がかかる。括弧は常設ツールから取るだけなので半分。
+  const layout = countLayout(ast);
+  const setupTime = COG.SETUP_BASE + COG.SETUP_PER_CARD * layout.weight;
+
+  const trace = [
+    {
+      kind: 'setup', risk: 0, time: setupTime,
+      label: `式を組む（カード ${layout.cards} 枚` +
+        `${layout.parens > 0 ? ` ＋ 括弧 ${layout.parens} 個` : ''}を並べる）`,
+    },
+    {
+      kind: 'calc', risk: clamp01(1 - clamp01(root.ok)), time: calcTime,
+      label: '計算する', children: ctx.trace.map(scaleStep),
+    },
+  ];
+  time += setupTime;
+
+  if (transcribe > 0) {
+    trace.push({
+      kind: 'write', risk: 0, time: transcribe,
+      label: `答えの ${answerDigits} 桁を入力する`,
+    });
+    time += transcribe;
+  }
+  time = Math.min(time, COG.MAX_TIME);
   const pWm = Math.exp(-COG.WM_ACC_PENALTY * wmOverload);
 
   // ---- 手続き上のうっかりミス ----
@@ -819,6 +1184,9 @@ function _analyzeFormulaUncached(formula, profile) {
       : `規模(10↑↑x)申告が必要 — 正答率 ${(pMode * 100).toFixed(0)}%`);
   }
 
+  // pBase は「一発勝負（見直しなし・時間制限なし）の正答率」。
+  // 手計算モデルでは *天井ではない* — 検算で上がる余地があるので、
+  // 最終的な正答率は accuracyUnderTime() が pBase より上に出ることがある。
   const pBase = clamp(profile.baseAccuracy * pSteps * pWm * pMode, 0, COG.P_MAX);
 
   // ---- 難易度スカラー（誤答時の誤差分布に使う）----
@@ -830,7 +1198,8 @@ function _analyzeFormulaUncached(formula, profile) {
 
   const out = {
     ok: true, formula: src, value, answerMode,
-    requiredTime: time, wmPeak, wmOverload,
+    requiredTime: time, calcTime, setupTime, transcribe, trace, layout,
+    wmPeak, wmOverload,
     pSteps, pWm, pMode, pBase, difficulty,
     blocked: root.blocked, sigma: root.sigma, switches, notes,
   };
@@ -840,7 +1209,9 @@ function _analyzeFormulaUncached(formula, profile) {
 function failed(src, error) {
   return {
     ok: false, formula: src, value: null, answerMode: 'exact', error,
-    requiredTime: COG.MAX_TIME, wmPeak: 99, wmOverload: 99,
+    requiredTime: COG.MAX_TIME, calcTime: COG.MAX_TIME, setupTime: 0, transcribe: 0, trace: [],
+    layout: { cards: 0, parens: 0, weight: 0 },
+    wmPeak: 99, wmOverload: 99,
     pSteps: 0, pWm: 0, pMode: 0, pBase: 0, difficulty: 1,
     blocked: true, sigma: Infinity, switches: 0, notes: ['数式として無効'],
   };
@@ -853,11 +1224,22 @@ function failed(src, error) {
 /**
  * 制限時間を与えて最終的な正答率を出す。
  *
- * 時間の効き方を2つに分解している:
+ * 時間の効き方を3つに分解している。3つ目が手計算モデルの中核。
+ *
  *   1. 間に合う確率  — 所要時間は対数正規に散らばる。P(T < 制限時間)。
- *   2. 焦り係数      — 間に合わせるために検算を飛ばすぶん、
- *                      手続きの誤り率が指数的に増幅される。
+ *   2. 焦り係数      — 間に合わせるために手順を省くぶん、
+ *                      初回の誤り率が指数的に増幅される。
  *                      増幅の強さは stressTolerance で緩和される。
+ *   3. **見直し**    — 余った時間で検算できる。紙に手が残っているから可能で、
+ *                      暗算モデルには無かった経路。これがあるので
+ *                      「時間さえあれば解ける式」がちゃんと解けるようになる。
+ *
+ * 見直しで消えるのは *うっかりミス* だけ。手順の思い違い（systematic）は
+ * 何度なぞっても同じ答えに着地するので残る。難しい式ほどその比率が高い。
+ *
+ *   初回誤り     err1 = 1 − pSteps^α
+ *   系統誤り     syst = err1 × (SYSTEMATIC_BASE + SYSTEMATIC_SLOPE × 難易度)
+ *   見直し後     errN = syst + (err1 − syst) × (1 − checkRate)^見直し回数
  *
  * @param {object} analysis analyzeFormula の戻り
  * @param {number} timeAvailable 秒
@@ -865,7 +1247,10 @@ function failed(src, error) {
  */
 function accuracyUnderTime(analysis, timeAvailable, profile) {
   if (!analysis.ok) {
-    return { pCorrect: 0, pFinish: 0, rush: 1, ratio: 0, alpha: 1 };
+    return {
+      pCorrect: 0, pFinish: 0, rush: 1, ratio: 0, alpha: 1,
+      rechecks: 0, errFirst: 1, errAfter: 1, systematic: 1,
+    };
   }
 
   const req = Math.max(0.5, analysis.requiredTime);
@@ -880,17 +1265,27 @@ function accuracyUnderTime(analysis, timeAvailable, profile) {
   const rush = clamp01(1 - ratio / COG.RUSH_THRESHOLD);
   const alpha = 1 + COG.RUSH_STRENGTH * rush * (2 - profile.stressTolerance);
 
-  const pSteps = Math.pow(clamp01(analysis.pSteps), alpha);
+  // 3) 見直し回数 — 初回を書き終えた残り時間を、検算1回ぶんの時間で割る
+  const checkCost = req * COG.RECHECK_FACTOR;
+  const rechecks = clamp(
+    Math.floor((avail - req) / Math.max(checkCost, 1e-6)), 0, COG.MAX_RECHECKS);
+
+  const errFirst = clamp01(1 - Math.pow(clamp01(analysis.pSteps), alpha));
+  const systShare = clamp01(
+    COG.SYSTEMATIC_BASE + COG.SYSTEMATIC_SLOPE * clamp01(analysis.difficulty));
+  const systematic = errFirst * systShare;
+  const errAfter = clamp01(
+    systematic + (errFirst - systematic) * Math.pow(1 - profile.checkRate, rechecks));
 
   // pMode が 0（厳密モード以外 / 解けない式）なら、時間をいくら積んでも当たらない。
   // ただし pFinish は「答えを書き上げること自体はできる」ので別に返す
   // （提出はするが不正解、という挙動を作るため）。
   const pCorrect = (analysis.pMode <= 0 || analysis.blocked) ? 0 : clamp(
-    profile.baseAccuracy * pFinish * pSteps * analysis.pWm * analysis.pMode,
+    profile.baseAccuracy * pFinish * (1 - errAfter) * analysis.pWm * analysis.pMode,
     COG.P_MIN, COG.P_MAX
   );
 
-  return { pCorrect, pFinish, rush, ratio, alpha };
+  return { pCorrect, pFinish, rush, ratio, alpha, rechecks, errFirst, errAfter, systematic };
 }
 
 /**
@@ -927,9 +1322,19 @@ function pickErrorTier(difficulty, rng) {
 // エクスポート
 // ============================================================
 
+/**
+ * 解析キャッシュを捨てる。
+ * COG の定数を実行中に書き換えたときは、これを呼ばないと変更が反映されない
+ * （キャッシュキーが `式|レベル` で、定数の値を含んでいないため）。
+ * ai-lab.html のチューニングパネルが使う。
+ */
+function clearAnalysisCache() {
+  _analysisCache.clear();
+}
+
 const AICognition = {
   COG, AI_PROFILES, AI_LEVEL_ORDER, getProfile,
-  analyzeFormula, accuracyUnderTime,
+  analyzeFormula, accuracyUnderTime, clearAnalysisCache,
   errorTierWeights, pickErrorTier,
   isAllowedTetration, digitsOfValue, significantDigits, isRoundValue,
   chunksOfValue, exactSmallInt, normCdf, clamp, clamp01,

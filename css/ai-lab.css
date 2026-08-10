@@ -1,0 +1,703 @@
+/* ============================================================
+   ai-lab.css — AIテスト場（ai-lab.html）専用のレイアウト
+   ------------------------------------------------------------
+   カードの見た目・配色は css/style.css をそのまま使う。
+   ここに書くのは「ラボ画面にしか無いもの」だけ。
+   ============================================================ */
+
+/* 背景はページ全体（スクロール分も）を覆わせる。
+   background-attachment: fixed だと画面の高さぶんしか塗られず、
+   長いページの下のほうが地の白のままになる。 */
+html { background: var(--bg-primary); }
+
+.lab-body {
+  background-color: var(--bg-primary);
+  background-image: radial-gradient(ellipse at top, #1a1a3e 0%, #0f0f1a 60%);
+  background-repeat: no-repeat;
+  min-height: 100vh;
+  padding-bottom: 4rem;
+}
+
+/* ---------- ヘッダー ---------- */
+
+.lab-header {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 0.5rem;
+  position: relative;
+}
+
+.lab-header h1 {
+  font-size: clamp(1.4rem, 4vw, 2rem);
+  letter-spacing: 0.02em;
+}
+
+.lab-sub {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin-top: 0.3rem;
+}
+
+.lab-back {
+  display: inline-block;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+  transition: color 0.2s;
+}
+
+.lab-back:hover { color: var(--text-primary); }
+
+/* ---------- タブ ---------- */
+
+.lab-tabs {
+  max-width: 1100px;
+  margin: 1rem auto 0;
+  padding: 0 1rem;
+  display: flex;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.lab-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: bold;
+  padding: 0.7rem 1.1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.lab-tab:hover { color: var(--text-primary); }
+
+.lab-tab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-primary);
+}
+
+.lab-main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 0;
+}
+
+/* ---------- パネル ---------- */
+
+.lab-panel {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem;
+  margin-bottom: 1.1rem;
+}
+
+.lab-panel > h2 {
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+  margin-bottom: 0.85rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.lab-panel > h2 .lab-hint {
+  font-size: 0.75rem;
+  font-weight: normal;
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+
+.lab-subhead {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin: 1rem 0 0.5rem;
+}
+
+.lab-subhead:first-child { margin-top: 0; }
+
+/* ---------- カードパレット ---------- */
+
+.lab-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* パレットのカードは一回り小さくする。
+   transform: scale() だと領域の高さが元のままで隙間が空くので、実寸を変える。 */
+.lab-palette .card {
+  cursor: pointer;
+  width: 60px;
+  height: 84px;
+  font-size: 1.45rem;
+}
+
+.lab-palette .card.paren-card {
+  width: 50px;
+  height: 74px;
+  font-size: 1.7rem;
+}
+
+.lab-palette .card .card-label {
+  font-size: 0.45rem;
+  bottom: 5px;
+}
+
+.lab-palette .card:hover { transform: translateY(-4px); }
+
+.lab-palette .card.card-limited {
+  opacity: 0.35;
+  filter: grayscale(0.7);
+  cursor: not-allowed;
+}
+
+.lab-palette .card.card-limited:hover { transform: none; }
+
+/* ---------- 組み立てエリア ---------- */
+
+.lab-build {
+  min-height: 128px;
+  border: 2px dashed var(--border-glass);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.25);
+  padding: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.lab-build.is-empty {
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.lab-build .card { cursor: pointer; }
+
+.lab-build .card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 0 0 2px var(--danger), var(--shadow-card-hover);
+}
+
+.lab-build-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+}
+
+.lab-count {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.lab-count.over { color: var(--warning); }
+
+.lab-mini-btn {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border-glass);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.lab-mini-btn:hover { background: rgba(255, 255, 255, 0.14); }
+
+/* ---------- 数式テキスト / プレビュー ---------- */
+
+.lab-text-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.lab-text-row label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.lab-text-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.lab-text-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.lab-preview {
+  margin-top: 0.8rem;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: clamp(1.5rem, 4vw, 2.4rem);
+  min-height: 2.6rem;
+  word-break: break-all;
+}
+
+.lab-error {
+  margin-top: 0.6rem;
+  color: var(--danger);
+  font-size: 0.85rem;
+  min-height: 1.2rem;
+}
+
+.lab-warn { color: var(--warning); }
+
+/* ---------- 条件フォーム ---------- */
+
+.lab-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.9rem;
+}
+
+.lab-field label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.3rem;
+}
+
+.lab-field input[type="number"],
+.lab-field select {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  padding: 0.5rem 0.6rem;
+}
+
+.lab-field input[type="range"] {
+  width: 100%;
+  margin-top: 0.4rem;
+  accent-color: var(--accent-primary);
+}
+
+.lab-field select { font-family: var(--font-main); }
+
+.lab-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.lab-checkbox input { accent-color: var(--accent-primary); }
+
+.lab-run-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.lab-run-row .btn-premium { margin: 0; }
+
+/* ---------- 結果: 正解 ---------- */
+
+.lab-answer-value {
+  font-family: var(--font-mono);
+  font-size: 1.15rem;
+  color: var(--gold);
+  word-break: break-all;
+  line-height: 1.5;
+  max-height: 9rem;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.7rem;
+}
+
+.lab-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+.lab-tag.mode-exact { color: var(--success); }
+.lab-tag.mode-digits { color: var(--warning); }
+.lab-tag.mode-scale { color: var(--danger); }
+
+/* ---------- 結果: 正答率 ---------- */
+
+.lab-rate-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 1rem;
+}
+
+.lab-rate {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius);
+  padding: 1rem;
+  text-align: center;
+}
+
+.lab-rate .lab-rate-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.1em;
+}
+
+.lab-rate .lab-rate-value {
+  font-family: var(--font-mono);
+  font-size: clamp(2rem, 7vw, 3.2rem);
+  font-weight: bold;
+  line-height: 1.15;
+  margin: 0.2rem 0;
+}
+
+.lab-rate .lab-rate-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.rate-high { color: var(--success); }
+.rate-mid { color: var(--warning); }
+.rate-low { color: var(--danger); }
+
+/* ---------- 結果: 内訳 ---------- */
+
+.lab-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem;
+}
+
+.lab-stat {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.7rem;
+}
+
+.lab-stat .k {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.lab-stat .v {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+
+.lab-notes {
+  list-style: none;
+  margin-top: 0.8rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.lab-notes li {
+  padding: 0.3rem 0 0.3rem 1.1rem;
+  position: relative;
+}
+
+.lab-notes li::before {
+  content: '›';
+  position: absolute;
+  left: 0.2rem;
+  color: var(--accent-primary);
+}
+
+/* ---------- 表 ---------- */
+
+.lab-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.lab-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  min-width: 480px;
+}
+
+.lab-table th,
+.lab-table td {
+  padding: 0.45rem 0.6rem;
+  text-align: right;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+
+.lab-table th {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: normal;
+  letter-spacing: 0.05em;
+  text-align: right;
+}
+
+.lab-table th:first-child,
+.lab-table td:first-child { text-align: left; }
+
+.lab-table td.num { font-family: var(--font-mono); }
+
+.lab-table tr.is-picked {
+  background: rgba(102, 126, 234, 0.16);
+}
+
+.lab-table tr.is-current td { color: var(--gold); }
+
+.lab-bar {
+  display: inline-block;
+  vertical-align: middle;
+  height: 9px;
+  border-radius: 5px;
+  min-width: 2px;
+  background: var(--accent-primary);
+}
+
+.lab-bar-cell { width: 130px; text-align: left !important; }
+
+.lab-formula-cell {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.lab-value-cell {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 申告サンプル ---------- */
+
+.lab-samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.lab-sample {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.28rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-glass);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lab-sample.ok { border-color: rgba(74, 222, 128, 0.5); color: var(--success); }
+.lab-sample.ng { border-color: rgba(232, 85, 85, 0.45); color: #f0a0a0; }
+.lab-sample.to { border-color: rgba(154, 154, 176, 0.4); color: var(--text-muted); }
+
+.lab-sample .tier {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  margin-left: 0.3rem;
+}
+
+/* ---------- チャート ---------- */
+
+.lab-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.lab-chart .grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
+.lab-chart .axis { stroke: rgba(255, 255, 255, 0.25); stroke-width: 1; }
+.lab-chart .tick { fill: var(--text-muted); font-size: 11px; font-family: var(--font-mono); }
+.lab-chart .nowline { stroke: var(--gold); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.lab-chart .series { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+
+.lab-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.lab-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+
+.lab-swatch {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* ---------- チューニング ---------- */
+
+.lab-tune summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  padding: 0.2rem 0;
+}
+
+.lab-tune summary:hover { color: var(--text-primary); }
+
+.lab-tune-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.9rem;
+}
+
+.lab-tune-grid .lab-field label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+/* ---------- 手札タブ ---------- */
+
+.lab-hand {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-height: 118px;
+  align-items: center;
+}
+
+.lab-hand .card { cursor: pointer; }
+
+.lab-hand .card:hover {
+  box-shadow: 0 0 0 2px var(--danger), var(--shadow-card-hover);
+}
+
+.lab-empty-msg {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 0.5rem 0;
+}
+
+/* ---------- 小物 ---------- */
+
+.lab-muted { color: var(--text-muted); font-size: 0.8rem; }
+
+.lab-inline-note {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 0.6rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 600px) {
+  .lab-panel { padding: 0.9rem 0.8rem; }
+  .lab-main, .lab-header, .lab-tabs { padding-left: 0.7rem; padding-right: 0.7rem; }
+  .lab-palette { gap: 0.35rem; }
+  .lab-palette .card { width: 50px; height: 70px; font-size: 1.25rem; }
+  .lab-palette .card.paren-card { width: 42px; height: 62px; font-size: 1.4rem; }
+  .lab-build, .lab-hand { gap: 0.35rem; }
+  .lab-build .card, .lab-hand .card { width: 60px; height: 84px; font-size: 1.45rem; }
+  .lab-build { min-height: 104px; }
+  .lab-hand { min-height: 96px; }
+}
+
+/* ---------- 所要時間の内訳ツリー ---------- */
+
+.lab-tree-details summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  padding: 0.5rem 0 0.2rem;
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--border-glass);
+}
+
+.lab-tree-details summary:hover { color: var(--text-primary); }
+
+.lab-tree {
+  font-size: 0.83rem;
+  margin-top: 0.5rem;
+}
+
+.lab-tree-branch > summary,
+.lab-tree-leaf {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.28rem 0.4rem;
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+
+.lab-tree-branch > summary { cursor: pointer; }
+.lab-tree-branch > summary:hover,
+.lab-tree-leaf:hover { background: rgba(255, 255, 255, 0.05); }
+
+/* 入れ子は左に寄せてぶら下げる */
+.lab-tree-branch > *:not(summary) {
+  margin-left: 1.1rem;
+  border-left: 1px solid var(--border-glass);
+  padding-left: 0.6rem;
+}
+
+.lab-tree-time {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  min-width: 4.2rem;
+  text-align: right;
+}
+
+.lab-tree-label { color: var(--text-primary); flex: 1 1 12rem; }
+
+.lab-tree-risk {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--warning);
+}
+
+.lab-tree-kind {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .lab-tree-kind { display: none; }
+  .lab-tree-time { min-width: 3.6rem; }
+  .lab-tree-branch > *:not(summary) { margin-left: 0.5rem; padding-left: 0.4rem; }
+}

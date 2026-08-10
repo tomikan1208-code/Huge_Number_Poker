@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIテスト場 — 巨大数ポーカー</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/ai-lab.css">
+</head>
+<body class="lab-body">
+
+  <header class="lab-header">
+    <a class="lab-back" href="index.html">← ホームに戻る</a>
+    <h1>🧪 AIテスト場</h1>
+    <p class="lab-sub">
+      カードを並べて式を作り、計算時間（秒）と難易度を指定すると、
+      CPUの答えと正誤・正答率が出る。
+      CPUは<strong>紙とペンで手計算する</strong>前提なので、時間が余れば見直して正答率が上がる。
+    </p>
+  </header>
+
+  <nav class="lab-tabs">
+    <button class="lab-tab active" data-tab="formula" type="button">式テスト</button>
+    <button class="lab-tab" data-tab="hand" type="button">手札テスト</button>
+  </nav>
+
+  <main class="lab-main">
+
+    <!-- ==================================================== -->
+    <!-- タブ1: 式テスト                                       -->
+    <!-- ==================================================== -->
+    <section id="tab-formula" class="lab-tab-panel">
+
+      <!-- ---------- ① カードを並べる ---------- -->
+      <div class="lab-panel">
+        <h2>① カードを並べて式を作る
+          <span class="lab-hint">パレットをクリックで追加／並べた札をクリックで削除</span>
+        </h2>
+
+        <p class="lab-subhead">数字</p>
+        <div id="palette-numbers" class="lab-palette"></div>
+
+        <p class="lab-subhead">演算子</p>
+        <div id="palette-operators" class="lab-palette"></div>
+
+        <p class="lab-subhead">括弧（枚数に数えない）</p>
+        <div id="palette-parens" class="lab-palette"></div>
+
+        <p class="lab-subhead">組み立て</p>
+        <div id="build-area" class="lab-build is-empty">
+          <span>ここにカードが並ぶ</span>
+        </div>
+
+        <div class="lab-build-toolbar">
+          <span id="card-count" class="lab-count">使用 0 / 5 枚</span>
+          <button id="btn-undo" class="lab-mini-btn" type="button">1枚戻す</button>
+          <button id="btn-clear" class="lab-mini-btn" type="button">全消去</button>
+          <button class="lab-mini-btn" type="button" data-example="(4+6)^9">例: (4+6)^9</button>
+          <button class="lab-mini-btn" type="button" data-example="6^9">例: 6^9</button>
+          <button class="lab-mini-btn" type="button" data-example="9^9^9">例: 9^9^9</button>
+          <button class="lab-mini-btn" type="button" data-example="(3+4)!">例: (3+4)!</button>
+        </div>
+
+        <div class="lab-text-row">
+          <label for="formula-text">数式を直接入力</label>
+          <input id="formula-text" class="lab-text-input" type="text"
+                 spellcheck="false" autocomplete="off" placeholder="例: (4+6)^9">
+        </div>
+
+        <div id="formula-preview" class="lab-preview formula-preview"></div>
+        <div id="formula-error" class="lab-error"></div>
+      </div>
+
+      <!-- ---------- ② 条件 ---------- -->
+      <div class="lab-panel">
+        <h2>② 条件を決める
+          <span class="lab-hint">本編では 計算時間（秒）＝ ポットのチップ数</span>
+        </h2>
+
+        <div class="lab-form">
+          <div class="lab-field">
+            <label for="level">難易度（CPUのレベル）</label>
+            <select id="level"></select>
+          </div>
+
+          <div class="lab-field">
+            <label for="seconds">計算時間（秒）</label>
+            <input id="seconds" type="number" min="1" max="3600" step="1" value="60">
+            <input id="seconds-range" type="range" min="10" max="600" step="5" value="60">
+          </div>
+
+          <div class="lab-field">
+            <label for="trials">試行回数（実測）</label>
+            <input id="trials" type="number" min="1" max="20000" step="50" value="200">
+          </div>
+
+          <div class="lab-field">
+            <label for="opponents">対戦相手の人数</label>
+            <input id="opponents" type="number" min="1" max="7" step="1" value="2">
+          </div>
+
+          <div class="lab-field">
+            <label for="seed">乱数シード</label>
+            <input id="seed" type="number" min="0" step="1" value="12345">
+          </div>
+        </div>
+
+        <div class="lab-run-row">
+          <button id="btn-run" class="btn-premium primary" type="button">判定する</button>
+          <label class="lab-checkbox">
+            <input id="mc-all-levels" type="checkbox" checked>
+            実測を5レベル全部で回す
+          </label>
+          <label class="lab-checkbox">
+            <input id="auto-run" type="checkbox" checked>
+            条件を変えたら自動で再計算
+          </label>
+          <span id="run-time" class="lab-muted"></span>
+        </div>
+
+        <p class="lab-inline-note">
+          対戦相手の人数は「その値で全員を上回る確率（beat）」と効用の計算にだけ効く。
+          正答率そのものには影響しない。
+        </p>
+      </div>
+
+      <!-- ---------- 結果 ---------- -->
+      <div id="results" class="hidden">
+
+        <div class="lab-panel">
+          <h2>正解（システムの計算値）</h2>
+          <div class="lab-build-toolbar" style="margin-top:0;margin-bottom:0.7rem;">
+            <span id="answer-mode" class="lab-tag"></span>
+            <span id="answer-digits" class="lab-muted"></span>
+          </div>
+          <div id="answer-value" class="lab-answer-value"></div>
+          <p id="answer-hint" class="lab-inline-note"></p>
+        </div>
+
+        <div class="lab-panel">
+          <h2>正答率 <span class="lab-hint" id="rate-caption"></span></h2>
+          <div class="lab-rate-row">
+            <div class="lab-rate">
+              <div class="lab-rate-label">理論値（モデル）</div>
+              <div id="rate-theory" class="lab-rate-value">–</div>
+              <div id="rate-theory-sub" class="lab-rate-sub"></div>
+            </div>
+            <div class="lab-rate">
+              <div class="lab-rate-label">実測（シミュレーション）</div>
+              <div id="rate-measured" class="lab-rate-value">–</div>
+              <div id="rate-measured-sub" class="lab-rate-sub"></div>
+            </div>
+            <div class="lab-rate">
+              <div class="lab-rate-label">内訳</div>
+              <div id="rate-breakdown" class="lab-rate-sub" style="text-align:left;margin-top:0.6rem;"></div>
+            </div>
+          </div>
+          <div id="selfcheck" class="lab-inline-note"></div>
+        </div>
+
+        <div class="lab-panel">
+          <h2>CPUの答え（申告サンプル）
+            <span class="lab-hint">先頭20回ぶん。✅正解 ❌誤答 ⏱時間切れ</span>
+          </h2>
+          <div id="samples" class="lab-samples"></div>
+        </div>
+
+        <div class="lab-panel">
+          <h2>なぜその正答率になるのか</h2>
+          <div id="stats" class="lab-stats"></div>
+          <ul id="notes" class="lab-notes"></ul>
+
+          <details class="lab-tree-details">
+            <summary>⏱ 所要時間の内訳（式操作 / 計算 / 答え入力）</summary>
+            <p class="lab-inline-note">
+              ▶ を開くと計算の中身へ、さらに開くと筆算の1行ずつまで下りられる。
+              秒数には演算子の切替・計算の速さ・作業記憶の超過を反映済みなので、
+              合計は上の「所要時間（初回）」に一致する。
+            </p>
+            <div id="trace-tree" class="lab-tree"></div>
+            <p id="trace-summary" class="lab-inline-note"></p>
+          </details>
+        </div>
+
+        <div class="lab-panel">
+          <h2>5段階の比較
+            <span class="lab-hint">同じ式・同じ秒数で 中学生〜トップ競技者</span>
+          </h2>
+          <div class="lab-table-wrap">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>レベル</th>
+                  <th>所要時間</th>
+                  <th>余裕比</th>
+                  <th>理論</th>
+                  <th>実測</th>
+                  <th class="lab-bar-cell">&nbsp;</th>
+                </tr>
+              </thead>
+              <tbody id="level-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="lab-panel">
+          <h2>計算時間と正答率
+            <span class="lab-hint">ベットを積むとどれだけ当たるようになるか</span>
+          </h2>
+          <div id="sweep-chart"></div>
+          <div id="sweep-legend" class="lab-legend"></div>
+        </div>
+
+        <div class="lab-panel">
+          <details class="lab-tune">
+            <summary>⚙ モデルの定数をその場でいじる（AIの改善用）</summary>
+            <p class="lab-inline-note">
+              js/ai-cognition.js の <code>COG</code> をメモリ上で書き換えて即座に効かせる。
+              ファイルには保存されない（リロードで元に戻る）。
+              良い値が見つかったら js/ai-cognition.js の <code>COG</code> を直接書き換えること。
+            </p>
+            <div id="tune-grid" class="lab-tune-grid"></div>
+            <div class="lab-build-toolbar">
+              <button id="btn-tune-reset" class="lab-mini-btn" type="button">既定値に戻す</button>
+            </div>
+          </details>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ==================================================== -->
+    <!-- タブ2: 手札テスト                                     -->
+    <!-- ==================================================== -->
+    <section id="tab-hand" class="lab-tab-panel hidden">
+
+      <div class="lab-panel">
+        <h2>手札を7枚そろえる
+          <span class="lab-hint">パレットをクリックで追加／手札をクリックで削除</span>
+        </h2>
+
+        <p class="lab-subhead">数字</p>
+        <div id="hand-palette-numbers" class="lab-palette"></div>
+
+        <p class="lab-subhead">演算子</p>
+        <div id="hand-palette-operators" class="lab-palette"></div>
+
+        <p class="lab-subhead">手札</p>
+        <div id="hand-area" class="lab-hand">
+          <span class="lab-empty-msg">まだ1枚も無い</span>
+        </div>
+
+        <div class="lab-build-toolbar">
+          <span id="hand-count" class="lab-count">0 / 7 枚</span>
+          <button id="btn-hand-random" class="lab-mini-btn" type="button">ランダムに配る</button>
+          <button id="btn-hand-clear" class="lab-mini-btn" type="button">全消去</button>
+        </div>
+      </div>
+
+      <div class="lab-panel">
+        <h2>条件</h2>
+        <div class="lab-form">
+          <div class="lab-field">
+            <label for="hand-level">難易度（CPUのレベル）</label>
+            <select id="hand-level"></select>
+          </div>
+          <div class="lab-field">
+            <label for="hand-seconds">計算時間（秒）</label>
+            <input id="hand-seconds" type="number" min="1" max="3600" step="1" value="60">
+            <input id="hand-seconds-range" type="range" min="10" max="600" step="5" value="60">
+          </div>
+          <div class="lab-field">
+            <label for="hand-trials">試行回数（実測）</label>
+            <input id="hand-trials" type="number" min="1" max="20000" step="50" value="200">
+          </div>
+          <div class="lab-field">
+            <label for="hand-opponents">対戦相手の人数</label>
+            <input id="hand-opponents" type="number" min="1" max="7" step="1" value="2">
+          </div>
+          <div class="lab-field">
+            <label for="hand-seed">乱数シード</label>
+            <input id="hand-seed" type="number" min="0" step="1" value="12345">
+          </div>
+        </div>
+        <div class="lab-run-row">
+          <button id="btn-hand-run" class="btn-premium primary" type="button">AIに考えさせる</button>
+          <span id="hand-run-time" class="lab-muted"></span>
+        </div>
+        <div id="hand-error" class="lab-error"></div>
+      </div>
+
+      <div id="hand-results" class="hidden">
+
+        <div class="lab-panel">
+          <h2>AIが選ぶ式</h2>
+          <div class="lab-rate-row">
+            <div class="lab-rate">
+              <div class="lab-rate-label">選んだ式</div>
+              <div id="hand-pick-formula" class="lab-rate-value" style="font-size:1.8rem;">–</div>
+              <div id="hand-pick-value" class="lab-rate-sub"></div>
+            </div>
+            <div class="lab-rate">
+              <div class="lab-rate-label">理論正答率</div>
+              <div id="hand-pick-theory" class="lab-rate-value">–</div>
+              <div id="hand-pick-theory-sub" class="lab-rate-sub"></div>
+            </div>
+            <div class="lab-rate">
+              <div class="lab-rate-label">実測正答率</div>
+              <div id="hand-pick-measured" class="lab-rate-value">–</div>
+              <div id="hand-pick-measured-sub" class="lab-rate-sub"></div>
+            </div>
+          </div>
+          <p class="lab-inline-note">
+            式の選択（chooseCandidate）は決まった手順なので、同じ条件なら毎回同じ式になる。
+            ばらつくのは申告の中身（当たるか外すか、どれくらい外すか）のほう。
+            学習済みのニューラル方策はゲームの状態（ポット・チップ・席順）を必要とするため、
+            このラボではヒューリスティック方策だけを見ている。
+          </p>
+        </div>
+
+        <div class="lab-panel">
+          <h2>候補一覧
+            <span class="lab-hint">値の大きさと当てやすさのパレート境界。■の行がAIの選択</span>
+          </h2>
+          <div class="lab-table-wrap">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>式</th>
+                  <th>値</th>
+                  <th>答え方</th>
+                  <th>所要秒</th>
+                  <th>WM</th>
+                  <th>pCorrect</th>
+                  <th>beat</th>
+                  <th>効用</th>
+                </tr>
+              </thead>
+              <tbody id="hand-cand-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="lab-panel">
+          <h2>レベルごとに何を選ぶか</h2>
+          <div class="lab-table-wrap">
+            <table class="lab-table">
+              <thead>
+                <tr>
+                  <th>レベル</th>
+                  <th>選ぶ式</th>
+                  <th>値</th>
+                  <th>所要秒</th>
+                  <th>理論</th>
+                  <th>実測</th>
+                  <th class="lab-bar-cell">&nbsp;</th>
+                </tr>
+              </thead>
+              <tbody id="hand-level-table"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <script src="js/engine.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/ai-cognition.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/ai-lab.js"></script>
+</body>
+</html>
