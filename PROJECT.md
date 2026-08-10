@@ -252,6 +252,9 @@ Huge_Number_Poker/
 ├── index.html                  ローカル/ソロ用の全画面（ホーム・設定・ソロ・ルール・ゲーム）
 ├── online.html                 オンライン対戦用（ロビー＋ゲーム画面）
 ├── ai-lab.html                 AIテスト場（CPUの正答率を確かめる。§12.10）
+├── AI学習コントロールパネル.vbs  学習GUIを開く（pythonw でコンソールなし。§13.5）
+│                                ★UTF-16LE(BOM付き)で保存すること。UTF-8だと無言で起動しない
+├── AI学習コントロールパネル.bat  同上（コンソールあり・Python と依存の確認つき）
 ├── server.js                   Express + Socket.io。部屋管理・サーバー権威のゲーム進行
 ├── package.json                deps: express, socket.io / `npm start` で server.js
 ├── start.bat                   起動一式（クリーンアップ→依存確認→FW確認→サーバ起動→ブラウザ）
@@ -872,13 +875,29 @@ AIは「**大きさを少し諦めて、確実に当てられる式を選ぶ**�
 > ランダム相手には最適でないので想定内だが、過度に守りに入っていないかは
 > ダッシュボードの `フォールド率` と `提出値の規模` で監視できるようにしてある。
 
-### 13.5 学習ダッシュボード
+### 13.5 学習ダッシュボード（GUI）
 
-`python train/launcher.py` で起動（Flask + SSE、`train/web/`）。
+**`AI学習コントロールパネル.vbs` をダブルクリック**（Windows）。
+`python train/launcher.py` でも同じものが開く。Flask + SSE、画面は `train/web/`。
 
 - ディスクの JSON ログを**正**とし、標準出力のパースは進行中の分を補うだけ
 - グラフは**単系列 × small multiples・単軸**。2軸グラフは作らない
 - 指標はレベルごとに別ファイル（`train/models/ppo_<レベル>_log.json`）
+
+#### 起動まわりの3つの罠（`skills/ai-training-dashboard/references/` に詳細）
+
+いずれも**静かに壊れる**ので、触るときは必ず思い出すこと。
+
+| | 何が起きるか |
+|---|---|
+| `.vbs` を UTF-8 で保存 | Windows Script Host が ANSI として読み、日本語コメントが化けて次の行のコードを巻き込む。**エラーも出ずに何も起動しない**。UTF-16LE(BOM付き) で保存する |
+| `pythonw.exe` で `print()` | コンソールが無いと `sys.stdout` が `None` になり、`print()` が例外で即死。画面には何も出ない。`launcher.py:_ensure_streams()` がログファイルへ逃がしている |
+| 空きポート判定に `SO_REUSEADDR` | Windows では使用中のポートにも bind できる（Linuxと逆）。二重起動する。`find_free_port()` では付けていない |
+
+`.vbs` はコンソールが無いぶん「ダブルクリックしても無反応」になりやすいので、
+`launcher.py:check_dependencies()` が **flask / torch / numpy / node** を起動前に確かめ、
+足りなければ Windows のダイアログで知らせる。
+原因を詳しく見るときは `AI学習コントロールパネル.bat`（コンソールあり・その場で pip install できる）。
 
 ### 13.6 学習した方策をゲームで使う
 

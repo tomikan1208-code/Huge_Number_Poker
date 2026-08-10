@@ -15,10 +15,11 @@ dashboard_server.py の Flask サーバーをバックグラウンドで起動�
 （train.py は世代ごとにチェックポイントを保存しているので、
   失われるのは進行中の1世代分だけ）。
 
-使い方:
-  python launcher.py           … コンソールあり（エラーを見たいとき）
-  start_app.bat                … 同上
-  MDD2コントロールパネル.vbs   … コンソールなし（アプリらしく起動）
+使い方（いずれもリポジトリ直下から）:
+  AI学習コントロールパネル.vbs   … コンソールなし。普段はこれ
+                                   （右クリック→ショートカット作成でデスクトップに置ける）
+  AI学習コントロールパネル.bat   … コンソールあり。起動しないときの原因を見る用
+  python train/launcher.py       … 同上
 """
 
 import os
@@ -62,9 +63,81 @@ def _ensure_streams():
 
 LOG_PATH = _ensure_streams()
 
-from dashboard_server import app, manager  # noqa: E402
+
+def _message_box(title, text):
+    """コンソールが無くても見えるように、Windows のダイアログで知らせる。
+
+    .vbs（pythonw）から起動されると標準出力はどこにも出ない。
+    依存パッケージが無いだけなのに「ダブルクリックしても何も起きない」に
+    見えてしまうので、ここだけは必ず画面に出す。
+    """
+    print(f'{title}: {text}', flush=True)
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, text, title, 0x10)   # MB_ICONERROR
+    except Exception:
+        pass
+
+
+def check_dependencies():
+    """起動前に必要なものが揃っているか確かめる。
+
+    flask   … 無いとこの画面自体が出せない（致命的）
+    torch   … 無くても画面は出るが、学習を開始できない
+    numpy   … 同上
+    node    … 環境（ゲームのルール）が Node 側にあるので学習に必須
+    """
+    missing_fatal, missing_train = [], []
+
+    for mod, label in [('flask', 'flask')]:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing_fatal.append(label)
+
+    for mod, label in [('torch', 'torch'), ('numpy', 'numpy')]:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing_train.append(label)
+
+    if not shutil.which('node'):
+        missing_train.append('Node.js（環境サーバーに必要）')
+
+    if missing_fatal:
+        _message_box(
+            f'{APP_TITLE} — 起動できません',
+            '次のパッケージが入っていません:\n\n'
+            f'    {", ".join(missing_fatal)}\n\n'
+            'コマンドプロンプトで次を実行してください:\n\n'
+            '    pip install -r train/requirements.txt\n\n'
+            'コンソール付きで原因を見るなら\n'
+            '「AI学習コントロールパネル.bat」を実行してください。'
+        )
+        sys.exit(1)
+
+    if missing_train:
+        _message_box(
+            f'{APP_TITLE} — 学習は開始できません',
+            '画面は開きますが、次が入っていないので学習を開始できません:\n\n'
+            f'    {", ".join(missing_train)}\n\n'
+            '過去の学習ログを見るだけならこのまま使えます。\n\n'
+            '学習もするなら:\n'
+            '    pip install -r train/requirements.txt\n'
+            '    （Node.js は https://nodejs.org/ から）'
+        )
+
+    return missing_train
+
 
 APP_TITLE = '巨大数ポーカーAI学習'
+
+_MISSING = check_dependencies()
+
+from dashboard_server import app, manager  # noqa: E402
+
 DEFAULT_PORT = 5556
 WINDOW_SIZE = (1440, 940)
 

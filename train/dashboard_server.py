@@ -49,6 +49,7 @@ MODES = {
     '上級（大学生・理系）': ['--level', 'skilled'],
     '中級（高校生）': ['--level', 'casual'],
     '達人（競技者）': ['--level', 'expert'],
+    '超人（トップ競技者）': ['--level', 'master'],
     '初級（中学生）': ['--level', 'novice'],
 }
 
