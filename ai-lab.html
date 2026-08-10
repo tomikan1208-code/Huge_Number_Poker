@@ -166,31 +166,20 @@
         </div>
 
         <div class="lab-panel">
-          <h2>計算の内訳
-            <span class="lab-hint">式をどう分解して、どの手順に何秒かけたか</span>
-          </h2>
-          <div class="lab-table-wrap">
-            <table class="lab-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>やること</th>
-                  <th>秒</th>
-                  <th>累計</th>
-                  <th>この手順で間違える確率</th>
-                  <th class="lab-bar-cell">&nbsp;</th>
-                </tr>
-              </thead>
-              <tbody id="trace-table"></tbody>
-            </table>
-          </div>
-          <p id="trace-summary" class="lab-inline-note"></p>
-        </div>
-
-        <div class="lab-panel">
           <h2>なぜその正答率になるのか</h2>
           <div id="stats" class="lab-stats"></div>
           <ul id="notes" class="lab-notes"></ul>
+
+          <details class="lab-tree-details">
+            <summary>⏱ 所要時間の内訳（式操作 / 計算 / 答え入力）</summary>
+            <p class="lab-inline-note">
+              ▶ を開くと計算の中身へ、さらに開くと筆算の1行ずつまで下りられる。
+              秒数には演算子の切替・計算の速さ・作業記憶の超過を反映済みなので、
+              合計は上の「所要時間（初回）」に一致する。
+            </p>
+            <div id="trace-tree" class="lab-tree"></div>
+            <p id="trace-summary" class="lab-inline-note"></p>
+          </details>
         </div>
 
         <div class="lab-panel">

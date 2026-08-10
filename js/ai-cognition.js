@@ -116,12 +116,17 @@ const COG = {
   CARRY_RATE: 0.45,
 
   /**
-   * 筆算の乗算: 部分積1つあたり / 桁揃えと最終加算（秒）。
-   * 暗算ではなく「書く」時間なので大きい。
-   * 4桁×4桁 = 1.071×16 + 0.830×8 ≈ 24秒 が基準人（大学生）の目安。
-   * 部分積4行×5桁＋合計8桁＝28文字を書くので、書字速度から見た下限とほぼ一致する。
+   * 筆算の乗算を、実際に紙の上でやることに分けた単価（秒）。
+   *
+   *   d1桁 × d2桁 は 部分積が d2 行。各行で d1 回の九九を引き、d1+1 桁を書く。
+   *   行が2つ以上あれば最後にそれらを足す（繰り上がり込み）。最後に答えを書く。
+   *
+   * MUL_RECALL_PER_PARTIAL は「筆算の途中で引く九九」1回ぶん。
+   * 単発で問われる九九（MUL_TABLE ≈ 1秒）より速いのは、
+   * 筆算では手順が流れに乗っていて毎回ゼロから思い出すわけではないため。
+   * ADD_PER_COLUMN は部分積を足すときの1桁ぶん（繰り上がりを含む）。
    */
-  MUL_PER_PARTIAL: 1.071, MUL_PER_DIGIT: 0.830,
+  MUL_RECALL_PER_PARTIAL: 0.439, ADD_PER_COLUMN: 0.15,
   /**
    * 九九（1桁×1桁）は計算ではなく記憶からの検索。
    * 成人が「7×8」に答えるまで約1秒（Campbell & LeFevre 2001）。ここは実測値に近い。
@@ -133,7 +138,7 @@ const COG = {
    * 末尾の0を並べる、答えを清書する、といった「考えずに書くだけ」の作業に使う。
    * 文章の書き写しは 40文字/分 程度だが、筆算の数字列は語を読み解く必要がないぶん速い。
    */
-  WRITE_PER_DIGIT: 0.424,
+  WRITE_PER_DIGIT: 0.517,
 
   /** 事実検索1回のコスト */
   RECALL: 0.80,
@@ -178,7 +183,7 @@ const COG = {
   // ---- 検算（手計算モデルの中核）----
 
   /** 見直し1回にかかる時間は、初回計算の何倍か（同じ手順をなぞるので速い） */
-  RECHECK_FACTOR: 0.518,
+  RECHECK_FACTOR: 0.526,
   /** これ以上見直しても集中力が持たない */
   MAX_RECHECKS: 12,
   /**
@@ -188,7 +193,7 @@ const COG = {
    * 手順そのものを取り違えていたら、何度なぞっても同じ答えになる。
    * 難しい問題ほど後者の比率が上がるので、難易度スカラーの1次式で与える。
    */
-  SYSTEMATIC_BASE: 0.22, SYSTEMATIC_SLOPE: 0.727,
+  SYSTEMATIC_BASE: 0.22, SYSTEMATIC_SLOPE: 0.756,
 
   /**
    * 正答率の上下限。1（=100%正解）には決してしない。
@@ -431,14 +436,51 @@ function riskAdd(d1, d2, profile) {
   return 1 - Math.pow(1 - profile.slipRate * 0.5, events);
 }
 
-function costMul(d1, d2, sig1, sig2, profile) {
-  // 末尾の0は書き足すだけ。有効数字の部分だけを実際に筆算する。
+/**
+ * 筆算の乗算を、紙の上で実際にやる手順に分解する。
+ *
+ * 合計を返すだけでなく手順の内訳も返すので、テスト場で
+ * 「36×6 の行に何秒、繰り上がりの処理に何秒」まで表示できる。
+ *
+ * @param {object} [opts] {aStr, bStr, resultDigits} 分かっていれば表示に使う
+ * @returns {{total:number, parts:Array<{label:string,time:number}>}}
+ */
+function mulBreakdown(d1, d2, sig1, sig2, profile, opts) {
+  const o = opts || {};
   const m1 = coreDigits(d1, sig1), m2 = coreDigits(d2, sig2);
   const zeros = trailingZeros(d1, sig1) + trailingZeros(d2, sig2);
-  const write = COG.WRITE_PER_DIGIT * zeros;
+  const parts = [];
+  const push = (label, time) => { if (time > 1e-9) parts.push({ label, time }); };
 
-  if (m1 === 1 && m2 === 1) return COG.MUL_TABLE + write;      // 九九は検索
-  return COG.MUL_PER_PARTIAL * m1 * m2 + COG.MUL_PER_DIGIT * (m1 + m2) + write;
+  // 桁数の多い方を上に置くと部分積の行数が減る。人は自然にそうする。
+  const top = Math.max(m1, m2), bottom = Math.min(m1, m2);
+  const resultDigits = o.resultDigits || (top + bottom);
+
+  if (top === 1 && bottom === 1) {
+    push(`九九「${o.aStr || `${d1}桁`} × ${o.bStr || `${d2}桁`}」を思い出す`, COG.MUL_TABLE);
+  } else {
+    for (let i = 0; i < bottom; i++) {
+      const digitLabel = i === 0 ? '一の位' : `${'十百千万'[Math.min(i - 1, 3)]}の位`;
+      push(
+        `部分積 ${i + 1}行目（${digitLabel}を掛ける）: 九九を ${top} 回 ＋ ${top + 1} 桁を書く`,
+        top * COG.MUL_RECALL_PER_PARTIAL + (top + 1) * COG.WRITE_PER_DIGIT
+      );
+    }
+    if (bottom > 1) {
+      push(
+        `${bottom} 行の部分積を足す（${resultDigits} 桁ぶんの繰り上がり処理）`,
+        resultDigits * (bottom - 1) * COG.ADD_PER_COLUMN
+      );
+    }
+  }
+  push(`答えの ${resultDigits} 桁を書く`, resultDigits * COG.WRITE_PER_DIGIT);
+  if (zeros > 0) push(`末尾に0を ${zeros} 個書き足す`, zeros * COG.WRITE_PER_DIGIT);
+
+  return { total: parts.reduce((s, p) => s + p.time, 0), parts };
+}
+
+function costMul(d1, d2, sig1, sig2, profile) {
+  return mulBreakdown(d1, d2, sig1, sig2, profile).total;
 }
 
 function riskMul(d1, d2, sig1, sig2, profile) {
@@ -470,14 +512,17 @@ function powerExactSteps(log10Base, exp, profile, baseLabel) {
     const bits = exp.toString(2);
     let cur = 1;
     for (let i = 1; i < bits.length; i++) {
-      steps.push([dg(cur), dg(cur), `${p(cur)} × ${p(cur)} = ${p(cur * 2)}`]);
+      steps.push([dg(cur), dg(cur), `${p(cur)} × ${p(cur)} = ${p(cur * 2)}`, p(cur), p(cur)]);
       cur *= 2;
-      if (bits[i] === '1') { steps.push([dg(cur), dg(1), `${p(cur)} × ${b} = ${p(cur + 1)}`]); cur += 1; }
+      if (bits[i] === '1') {
+        steps.push([dg(cur), dg(1), `${p(cur)} × ${b} = ${p(cur + 1)}`, p(cur), b]);
+        cur += 1;
+      }
       if (steps.length > 64) break;
     }
   } else {
     const n = Math.min(exp - 1, 64);
-    for (let k = 1; k <= n; k++) steps.push([dg(k), dg(1), `${p(k)} × ${b} = ${p(k + 1)}`]);
+    for (let k = 1; k <= n; k++) steps.push([dg(k), dg(1), `${p(k)} × ${b} = ${p(k + 1)}`, p(k), b]);
   }
   return steps;
 }
@@ -616,8 +661,22 @@ function shouldUseLog(value, profile, ctx) {
 // ここで積むのは *基準人の生の秒数*。速度・演算子切替・作業記憶超過の
 // 補正は最後にまとめて掛けるので、_analyzeFormulaUncached で同じ倍率を通す。
 
-function step(ctx, kind, label, time, risk) {
-  if (ctx && ctx.trace) ctx.trace.push({ kind, label, time, risk: clamp01(risk || 0) });
+function step(ctx, kind, label, time, risk, children) {
+  if (ctx && ctx.trace) {
+    ctx.trace.push({ kind, label, time, risk: clamp01(risk || 0), children: children || null });
+  }
+}
+
+/**
+ * 掛け算を1手として記録する。手順の内訳（部分積の行・繰り上がり・書き取り）を
+ * 子として持たせるので、テスト場で開いて中身を見られる。
+ */
+function mulStep(ctx, profile, d1, d2, sig1, sig2, label, opts) {
+  const bd = mulBreakdown(d1, d2, sig1, sig2, profile, opts);
+  const risk = riskMul(d1, d2, sig1, sig2, profile);
+  step(ctx, 'mul', label, bd.total, risk,
+    bd.parts.map((p) => ({ kind: 'detail', label: p.label, time: p.time, risk: 0 })));
+  return { time: bd.total, risk };
 }
 
 /** 値を短く表示する（記録のラベル用） */
@@ -651,12 +710,10 @@ function binaryExactStep(op, l, r, profile, value, ctx) {
     }
 
     case '*': {
-      const t = costMul(d1, d2, s1, s2, profile), risk = riskMul(d1, d2, s1, s2, profile);
-      const zeros = trailingZeros(d1, s1) + trailingZeros(d2, s2);
-      step(ctx, 'mul', zeros > 0
-        ? `${pair} を筆算（末尾の0が${zeros}個あるので実質 ${coreDigits(d1, s1)}桁×${coreDigits(d2, s2)}桁）`
-        : `${pair} を筆算（${d1}桁×${d2}桁）`, t, risk);
-      return { time: t, risk, sigma: 0 };
+      const r0 = mulStep(ctx, profile, d1, d2, s1, s2,
+        `${pair} を筆算する`,
+        { aStr: briefValue(l.value), bStr: briefValue(r.value), resultDigits: digitsOfValue(value) });
+      return { time: r0.time, risk: r0.risk, sigma: 0 };
     }
 
     case '^':
@@ -728,13 +785,11 @@ function powerExactStep(l, r, profile, baseDigits, baseSig, ctx) {
   const steps = powerExactSteps(log10Core, exp, profile, baseLabel);
   step(ctx, 'other', 'べき乗をどう分解するか決める', 1.0, 0);
   let time = 1.0, ok = 1;
-  for (const [a, b, label] of steps) {
+  for (const [a, b, label, aStr, bStr] of steps) {
     const da = Math.min(a, 4000), db = Math.min(b, 4000);
-    const t = costMul(da, db, 9, 9, profile);
-    const risk = riskMul(da, db, 9, 9, profile);
-    step(ctx, 'mul', `${label}（${da}桁×${db}桁）`, t, risk);
-    time += t;
-    ok *= (1 - risk);
+    const r0 = mulStep(ctx, profile, da, db, 9, 9, `${label}（${da}桁×${db}桁）`, { aStr, bStr });
+    time += r0.time;
+    ok *= (1 - r0.risk);
     if (time > COG.MAX_TIME) break;
   }
   const out = withZeros(time, 1 - ok);
@@ -754,11 +809,10 @@ function permutationExactStep(l, r, profile, ctx) {
   let curDigits = String(n).length;
   const termDigits = String(Math.max(1, n)).length;
   for (let i = 1; i < rr; i++) {
-    const t = costMul(curDigits, termDigits, 9, 9, profile);
-    const risk = riskMul(curDigits, termDigits, 9, 9, profile);
-    step(ctx, 'mul', `途中の積 × ${n - i}（${curDigits}桁×${termDigits}桁）`, t, risk);
-    time += t;
-    ok *= (1 - risk);
+    const r0 = mulStep(ctx, profile, curDigits, termDigits, 9, 9,
+      `途中の積 × ${n - i}（${curDigits}桁×${termDigits}桁）`);
+    time += r0.time;
+    ok *= (1 - r0.risk);
     curDigits += termDigits;
     if (time > COG.MAX_TIME) break;
   }
@@ -838,11 +892,11 @@ function applyFactorial(child, profile, ctx, isSwitch) {
       const da = sa.length, db = sb.length;
       const siga = sa.replace(/0+$/, '').length || 1;
       const sigb = sb.replace(/0+$/, '').length || 1;
-      const c = costMul(da, db, siga, sigb, profile);
-      const risk = riskMul(da, db, siga, sigb, profile);
       const next = a * b;
-      step(ctx, 'mul', `${briefValue(a)} × ${briefValue(b)} = ${briefValue(next)}`, c, risk);
-      t += c; ok *= (1 - risk);
+      const r0 = mulStep(ctx, profile, da, db, siga, sigb,
+        `${briefValue(a)} × ${briefValue(b)} = ${briefValue(next)}`,
+        { aStr: briefValue(a), bStr: briefValue(b), resultDigits: next.toString().length });
+      t += r0.time; ok *= (1 - r0.risk);
       return next;
     };
 
@@ -1036,20 +1090,37 @@ function _analyzeFormulaUncached(formula, profile) {
   }
 
   // ---- 手順ごとの内訳を、最終的な秒数と辻褄が合うように整える ----
+  //
   // ctx.trace には基準人の生の秒数が入っている。ここまでに掛けた倍率
   // （切替 / 速度 / WM超過）を同じだけ通して、合計が計算時間に一致するようにする。
+  // 3段の入れ子にして返す:
+  //   式操作 / 計算 / 答えの入力
+  //     計算 → 演算1つずつ
+  //             → 部分積の行・繰り上がり・書き取り
   const calcTime = time;
   const traceScale = root.time > 0 ? calcTime / root.time : 0;
-  const trace = ctx.trace.map((s) => ({ ...s, time: s.time * traceScale }));
+  const scaleStep = (s) => ({
+    ...s,
+    time: s.time * traceScale,
+    children: s.children ? s.children.map(scaleStep) : null,
+  });
 
-  // 操作時間は計算の速さと無関係なので、倍率を通さずここで足す
-  trace.push({ kind: 'setup', label: '式を組む＋答えを入力する', time: COG.SETUP_TIME, risk: 0 });
+  const trace = [
+    {
+      kind: 'setup', risk: 0, time: COG.SETUP_TIME,
+      label: '式を組む（カードを並べる）＋ 答えの入力欄へ',
+    },
+    {
+      kind: 'calc', risk: clamp01(1 - clamp01(root.ok)), time: calcTime,
+      label: '計算する', children: ctx.trace.map(scaleStep),
+    },
+  ];
   time += COG.SETUP_TIME;
+
   if (transcribe > 0) {
     trace.push({
-      kind: 'write',
-      label: `答えの ${answerDigits} 桁を書き出す`,
-      time: transcribe, risk: 0,
+      kind: 'write', risk: 0, time: transcribe,
+      label: `答えの ${answerDigits} 桁を入力する`,
     });
     time += transcribe;
   }

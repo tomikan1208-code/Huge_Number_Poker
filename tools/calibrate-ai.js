@@ -129,8 +129,8 @@ const FIT_KNOBS = [
   ['SYSTEMATIC_BASE', 0.03, 0.22],
   ['SYSTEMATIC_SLOPE', 0.05, 1.60],
   ['RECHECK_FACTOR', 0.25, 0.90],
-  ['MUL_PER_PARTIAL', 0.90, 1.80],   // 筆算の実感から大きくは動かさない
-  ['MUL_PER_DIGIT', 0.60, 1.40],
+  ['MUL_RECALL_PER_PARTIAL', 0.30, 1.00],   // 筆算中の九九1回。単発の想起(0.8秒)より速いはず
+  ['ADD_PER_COLUMN', 0.15, 0.70],           // 部分積を足すときの1桁ぶん
   ['WRITE_PER_DIGIT', 0.40, 1.20],   // 50〜150文字/分
   // SETUP_TIME（式制作＋回答入力の10秒）は設計者が決めた値なので当てない
 ];

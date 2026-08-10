@@ -635,3 +635,69 @@ html { background: var(--bg-primary); }
   .lab-build { min-height: 104px; }
   .lab-hand { min-height: 96px; }
 }
+
+/* ---------- 所要時間の内訳ツリー ---------- */
+
+.lab-tree-details summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  padding: 0.5rem 0 0.2rem;
+  margin-top: 0.8rem;
+  border-top: 1px solid var(--border-glass);
+}
+
+.lab-tree-details summary:hover { color: var(--text-primary); }
+
+.lab-tree {
+  font-size: 0.83rem;
+  margin-top: 0.5rem;
+}
+
+.lab-tree-branch > summary,
+.lab-tree-leaf {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.28rem 0.4rem;
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+
+.lab-tree-branch > summary { cursor: pointer; }
+.lab-tree-branch > summary:hover,
+.lab-tree-leaf:hover { background: rgba(255, 255, 255, 0.05); }
+
+/* 入れ子は左に寄せてぶら下げる */
+.lab-tree-branch > *:not(summary) {
+  margin-left: 1.1rem;
+  border-left: 1px solid var(--border-glass);
+  padding-left: 0.6rem;
+}
+
+.lab-tree-time {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  min-width: 4.2rem;
+  text-align: right;
+}
+
+.lab-tree-label { color: var(--text-primary); flex: 1 1 12rem; }
+
+.lab-tree-risk {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--warning);
+}
+
+.lab-tree-kind {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .lab-tree-kind { display: none; }
+  .lab-tree-time { min-width: 3.6rem; }
+  .lab-tree-branch > *:not(summary) { margin-left: 0.5rem; padding-left: 0.4rem; }
+}
