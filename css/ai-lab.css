@@ -141,12 +141,6 @@ html { background: var(--bg-primary); }
   font-size: 1.45rem;
 }
 
-.lab-palette .card.paren-card {
-  width: 50px;
-  height: 74px;
-  font-size: 1.7rem;
-}
-
 .lab-palette .card .card-label {
   font-size: 0.45rem;
   bottom: 5px;
@@ -629,7 +623,6 @@ html { background: var(--bg-primary); }
   .lab-main, .lab-header, .lab-tabs { padding-left: 0.7rem; padding-right: 0.7rem; }
   .lab-palette { gap: 0.35rem; }
   .lab-palette .card { width: 50px; height: 70px; font-size: 1.25rem; }
-  .lab-palette .card.paren-card { width: 42px; height: 62px; font-size: 1.4rem; }
   .lab-build, .lab-hand { gap: 0.35rem; }
   .lab-build .card, .lab-hand .card { width: 60px; height: 84px; font-size: 1.45rem; }
   .lab-build { min-height: 104px; }

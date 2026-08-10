@@ -1013,13 +1013,10 @@ body {
   color: rgba(26, 20, 8, 0.6);
 }
 
-/* 括弧カード */
+/* 括弧カード（大きさは他のカードと同じ） */
 .card.paren-card {
-  width: 60px;
-  height: 90px;
   background: linear-gradient(145deg, var(--card-paren-light), var(--card-paren));
   color: white;
-  font-size: 2rem;
   border: none;
 }
 
@@ -1667,18 +1664,9 @@ body {
     --hand-gap: 0.35rem;
   }
 
-  .card {
-    font-size: 1.4rem;
-  }
-
-  .card.paren-card {
-    width: 48px;
-    height: 72px;
-    font-size: 1.6rem;
-  }
-
+  .card,
   .paren-tools .paren-card {
-    font-size: 1.5rem;
+    font-size: 1.4rem;
   }
 
   .hand-area {
@@ -1723,8 +1711,8 @@ body {
     --hand-gap: 0.25rem;
   }
 
-  .card { font-size: 1.1rem; }
-  .paren-tools .paren-card { font-size: 1.2rem; }
+  .card,
+  .paren-tools .paren-card { font-size: 1.1rem; }
   .paren-tools .paren-card .paren-infinity { font-size: 0.7rem; top: 4px; right: 5px; }
   .hand-area { min-height: 70px; }
 }

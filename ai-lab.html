@@ -13,9 +13,7 @@
     <a class="lab-back" href="index.html">← ホームに戻る</a>
     <h1>🧪 AIテスト場</h1>
     <p class="lab-sub">
-      カードを並べて式を作り、計算時間（秒）と難易度を指定すると、
-      CPUの答えと正誤・正答率が出る。
-      CPUは<strong>紙とペンで手計算する</strong>前提なので、時間が余れば見直して正答率が上がる。
+      CPUは<strong>紙とペンで手計算する</strong>前提。時間が余れば見直すぶん正答率が上がる。
     </p>
   </header>
 
@@ -33,9 +31,7 @@
 
       <!-- ---------- ① カードを並べる ---------- -->
       <div class="lab-panel">
-        <h2>① カードを並べて式を作る
-          <span class="lab-hint">パレットをクリックで追加／並べた札をクリックで削除</span>
-        </h2>
+        <h2>① カードを並べて式を作る</h2>
 
         <p class="lab-subhead">数字</p>
         <div id="palette-numbers" class="lab-palette"></div>
@@ -159,9 +155,7 @@
         </div>
 
         <div class="lab-panel">
-          <h2>CPUの答え（申告サンプル）
-            <span class="lab-hint">先頭20回ぶん。✅正解 ❌誤答 ⏱時間切れ</span>
-          </h2>
+          <h2>CPUの答え（先頭20回）</h2>
           <div id="samples" class="lab-samples"></div>
         </div>
 
@@ -173,8 +167,7 @@
           <details class="lab-tree-details">
             <summary>⏱ 所要時間の内訳（式操作 / 計算 / 答え入力）</summary>
             <p class="lab-inline-note">
-              ▶ を開くと計算の中身へ、さらに開くと筆算の1行ずつまで下りられる。
-              秒数には演算子の切替・計算の速さ・作業記憶の超過を反映済みなので、
+              秒数には演算子の切替・計算の速さ・作業記憶の超過を反映済み。
               合計は上の「所要時間（初回）」に一致する。
             </p>
             <div id="trace-tree" class="lab-tree"></div>
@@ -183,9 +176,7 @@
         </div>
 
         <div class="lab-panel">
-          <h2>5段階の比較
-            <span class="lab-hint">同じ式・同じ秒数で 中学生〜トップ競技者</span>
-          </h2>
+          <h2>5段階の比較</h2>
           <div class="lab-table-wrap">
             <table class="lab-table">
               <thead>
@@ -204,9 +195,7 @@
         </div>
 
         <div class="lab-panel">
-          <h2>計算時間と正答率
-            <span class="lab-hint">ベットを積むとどれだけ当たるようになるか</span>
-          </h2>
+          <h2>計算時間と正答率</h2>
           <div id="sweep-chart"></div>
           <div id="sweep-legend" class="lab-legend"></div>
         </div>
@@ -215,9 +204,8 @@
           <details class="lab-tune">
             <summary>⚙ モデルの定数をその場でいじる（AIの改善用）</summary>
             <p class="lab-inline-note">
-              js/ai-cognition.js の <code>COG</code> をメモリ上で書き換えて即座に効かせる。
-              ファイルには保存されない（リロードで元に戻る）。
-              良い値が見つかったら js/ai-cognition.js の <code>COG</code> を直接書き換えること。
+              メモリ上の <code>COG</code> を書き換えるだけで、ファイルには保存されない（リロードで元に戻る）。
+              良い値が見つかったら js/ai-cognition.js を直接書き換えること。
             </p>
             <div id="tune-grid" class="lab-tune-grid"></div>
             <div class="lab-build-toolbar">
@@ -235,9 +223,7 @@
     <section id="tab-hand" class="lab-tab-panel hidden">
 
       <div class="lab-panel">
-        <h2>手札を7枚そろえる
-          <span class="lab-hint">パレットをクリックで追加／手札をクリックで削除</span>
-        </h2>
+        <h2>手札を7枚そろえる</h2>
 
         <p class="lab-subhead">数字</p>
         <div id="hand-palette-numbers" class="lab-palette"></div>
@@ -311,16 +297,15 @@
             </div>
           </div>
           <p class="lab-inline-note">
-            式の選択（chooseCandidate）は決まった手順なので、同じ条件なら毎回同じ式になる。
-            ばらつくのは申告の中身（当たるか外すか、どれくらい外すか）のほう。
-            学習済みのニューラル方策はゲームの状態（ポット・チップ・席順）を必要とするため、
-            このラボではヒューリスティック方策だけを見ている。
+            式の選択は決まった手順なので、同じ条件なら毎回同じ式になる。
+            ばらつくのは申告の中身のほう。
+            学習済みのニューラル方策はゲームの状態を必要とするため、ここではヒューリスティック方策だけを見ている。
           </p>
         </div>
 
         <div class="lab-panel">
           <h2>候補一覧
-            <span class="lab-hint">値の大きさと当てやすさのパレート境界。■の行がAIの選択</span>
+            <span class="lab-hint">値の大きさと当てやすさのパレート境界（■がAIの選択）</span>
           </h2>
           <div class="lab-table-wrap">
             <table class="lab-table">
