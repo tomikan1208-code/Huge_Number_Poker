@@ -720,7 +720,7 @@
     ['MAX_RECHECKS', '見直しの上限回数', 1],
     ['SYSTEMATIC_BASE', '検算で取れない誤りの下限', 0.02],
     ['SYSTEMATIC_SLOPE', '同・難易度の効き', 0.05],
-    ['MUL_RECALL_PER_PARTIAL', '筆算中の九九1回（秒）', 0.02],
+    ['MUL_TABLE', '九九1回の想起（秒）', 0.02],
     ['ADD_PER_COLUMN', '部分積を足す1桁ぶん（秒）', 0.02],
     ['SETUP_BASE', '式を組む基礎時間（秒）', 0.5],
     ['SETUP_PER_CARD', 'カード1枚を置く（秒）', 0.1],
