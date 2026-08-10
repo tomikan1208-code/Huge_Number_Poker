@@ -452,7 +452,8 @@
     theory.textContent = pct(p);
     theory.className = `lab-rate-value ${rateClass(p)}`;
     $('rate-theory-sub').textContent =
-      `pBase ${row.analysis.pBase.toFixed(3)} × 間に合う確率 ${row.acc.pFinish.toFixed(3)}`;
+      `間に合う確率 ${row.acc.pFinish.toFixed(2)} ／ 見直し ${row.acc.rechecks}回 ` +
+      `／ 誤り ${pct(row.acc.errFirst)} → ${pct(row.acc.errAfter)}`;
 
     $('rate-caption').textContent =
       `${row.profile.name}（${row.profile.label}） / ${cond.seconds}秒`;
@@ -518,17 +519,22 @@
     const a = row.analysis;
     const acc = row.acc;
     const items = [
-      ['所要時間', formatSeconds(a.requiredTime)],
+      ['所要時間（初回）', formatSeconds(a.requiredTime)],
       ['与えた時間', formatSeconds(cond.seconds)],
       ['余裕比 ratio', acc.ratio.toFixed(2)],
       ['間に合う確率', acc.pFinish.toFixed(3)],
       ['焦り係数 alpha', acc.alpha.toFixed(2)],
+      ['見直せる回数', `${acc.rechecks} 回`],
+      ['初回の誤り率', pct(acc.errFirst)],
+      ['見直し後の誤り率', pct(acc.errAfter)],
+      ['うち検算で取れない', pct(acc.systematic)],
+      ['検算の発見率', row.profile.checkRate.toFixed(2)],
       ['作業記憶 wmPeak', `${a.wmPeak.toFixed(1)} / 容量 ${row.profile.wmCapacity}`],
       ['WM超過', a.wmOverload.toFixed(2)],
       ['手順の正確さ pSteps', a.pSteps.toFixed(3)],
       ['WM由来 pWm', a.pWm.toFixed(3)],
       ['答え方由来 pMode', a.pMode.toFixed(3)],
-      ['時間抜きの正答率 pBase', a.pBase.toFixed(3)],
+      ['一発勝負の正答率 pBase', a.pBase.toFixed(3)],
       ['難易度スカラー', a.difficulty.toFixed(3)],
       ['演算子の切替', `${a.switches} 回`],
       ['log10の誤差 σ', isFinite(a.sigma) ? a.sigma.toPrecision(3) : '絞り込み不能'],
@@ -642,16 +648,19 @@
   // 書き換えたらキャッシュを捨てないと反映されない。
 
   const TUNABLE = [
+    ['RECHECK_FACTOR', '検算1回の時間比', 0.05],
+    ['MAX_RECHECKS', '見直しの上限回数', 1],
+    ['SYSTEMATIC_BASE', '検算で取れない誤りの下限', 0.02],
+    ['SYSTEMATIC_SLOPE', '同・難易度の効き', 0.05],
+    ['MUL_PER_PARTIAL', '部分積1つの秒数', 0.05],
+    ['MUL_PER_DIGIT', '桁揃え+加算の秒数', 0.05],
     ['PLANNING_TIME', '段取り時間（秒）', 0.5],
     ['TIME_SIGMA', '所要時間のばらつき σ', 0.05],
     ['RUSH_THRESHOLD', '焦り始める余裕比', 0.05],
     ['RUSH_STRENGTH', '焦りの強さ', 0.1],
     ['WM_TIME_PENALTY', 'WM超過→時間', 0.05],
     ['WM_ACC_PENALTY', 'WM超過→正答率', 0.05],
-    ['SWITCH_RISK_EXP', '演算子切替の効き', 0.05],
-    ['MUL_PER_PARTIAL', '部分積1つの秒数', 0.05],
-    ['ADD_PER_CARRY', '桁上がり1回の秒数', 0.05],
-    ['P_MAX', '正答率の上限', 0.01],
+    ['P_MAX', '正答率の上限', 0.001],
   ];
 
   const TUNE_DEFAULTS = {};

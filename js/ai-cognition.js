@@ -2,6 +2,37 @@
  * ai-cognition.js — 「人間にとっての計算難易度」モデル
  *
  * ============================================================
+ * 前提: 暗算ではなく「紙とペンでの手計算」
+ * ============================================================
+ * 人間のプレイヤーは紙に筆算を書いて答えを出す。CPU もそれに揃える。
+ * この前提が効くところが4つある。
+ *
+ * 1. **見直せる**（最重要）
+ *    暗算は一度間違えたら気づけないが、筆算は手が残るので検算できる。
+ *    したがって *時間を積めば正答率は上がり続ける*。
+ *    6^9 のような「手数は多いが原理的には難しくない」式は、
+ *    5分あればほぼ確実に合い、30秒ならまず間に合わない。
+ *    → accuracyUnderTime() の「見直し回数」を参照。
+ *    ただし上がり方には限度がある。検算で見つかるのは *うっかりミス* で、
+ *    手順の思い違いは何度なぞっても同じ答えになる（systematic）。
+ *
+ * 2. **遅い**
+ *    暗算より圧倒的に時間がかかる。1296×1296 の筆算は部分積を4行書いて
+ *    足すので、速い人でも30秒前後。コスト定数は筆算の実感に合わせてある。
+ *
+ * 3. **間違えにくい**
+ *    中間結果が紙に残るので、1操作あたりのミス率は暗算より一桁低い。
+ *    profile.slipRate は「筆算1操作（部分積1個 / 1桁の加算）あたり」の値。
+ *
+ * 4. **作業記憶の超過は主に時間を食う**
+ *    中間結果は紙に外部化されるので、容量を超えても答えを失うのではなく、
+ *    書いて読み直す往復が増える。よって WM 超過は
+ *    WM_TIME_PENALTY（大）と WM_ACC_PENALTY（小）に非対称に効かせる。
+ *
+ * 定数は tools/calibrate-ai.js のアンカー表に対して合わせてある。
+ * 定数をいじったら必ず `node tools/calibrate-ai.js` を通すこと。
+ *
+ * ============================================================
  * なぜ値の大きさで難易度を測ってはいけないか
  * ============================================================
  * (4+6)^9 は 6^9 より大きいが、人間にとっては圧倒的に易しい。
@@ -20,7 +51,8 @@
  * 依拠した知見
  * ============================================================
  * 1. 作業記憶容量: Miller(1956) 7±2、Cowan(2001) は「チャンク約4」。
- *    → profile.wmCapacity を 2.5〜6.5 チャンクで段階化した。
+ *    → profile.wmCapacity を 3.5〜8.0 チャンクで段階化した。
+ *      素の暗算容量より上に取ってあるのは、紙が外部記憶として働くため。
  * 2. レジスタ割り当て（Ershov 数 / Strahler 数）:
  *    式木を評価するのに必要な最小レジスタ数は、
  *      reg(葉)=1、reg(節)= 重い部分木を先に評価したときの最大同時保持数
@@ -78,13 +110,17 @@ const COG = {
   /** 人は数字を3桁ごとに束ねて覚える */
   CHUNK_DIGITS: 3,
 
-  /** 単純加算: 基本コスト / 桁あたり / 桁上がり1回あたり（秒） */
-  ADD_BASE: 0.40, ADD_PER_DIGIT: 0.30, ADD_PER_CARRY: 0.35,
+  /** 筆算の加算: 基本コスト / 桁あたり / 桁上がり1回あたり（秒） */
+  ADD_BASE: 0.60, ADD_PER_DIGIT: 0.45, ADD_PER_CARRY: 0.30,
   /** 桁上がりの発生率（一様乱数どうしの加算でおよそ 0.45） */
   CARRY_RATE: 0.45,
 
-  /** 乗算: 部分積1つあたり / 桁揃えと最終加算（秒） */
-  MUL_PER_PARTIAL: 0.75, MUL_PER_DIGIT: 0.50,
+  /**
+   * 筆算の乗算: 部分積1つあたり / 桁揃えと最終加算（秒）。
+   * 暗算ではなく「書く」時間なので大きい。
+   * 4桁×4桁 = 1.21×16 + 0.90×8 ≈ 27秒 が基準人（大学生）の目安。
+   */
+  MUL_PER_PARTIAL: 1.21, MUL_PER_DIGIT: 0.90,
   /** 九九（1桁×1桁）は検索 */
   MUL_TABLE: 0.80,
   /** 有効数字1桁（10のべき等）を掛けるのは桁ずらしだけ */
@@ -106,8 +142,12 @@ const COG = {
   /** 演算子ごとの作業記憶スロット（設計指示の表をそのまま採用） */
   OP_WM: { '+': 2, '*': 2, '^': 3, '!': 2, 'P': 4, '↑↑': 4 },
 
-  /** WM が容量を超えたときの時間・正答率へのペナルティ */
-  WM_TIME_PENALTY: 0.45, WM_ACC_PENALTY: 0.40,
+  /**
+   * WM が容量を超えたときのペナルティ。
+   * 紙があるので「答えを失う」のではなく「書いて読み直す往復が増える」。
+   * よって時間には強く、正答率には弱く効かせる（暗算モデルとの最大の違いの1つ）。
+   */
+  WM_TIME_PENALTY: 0.55, WM_ACC_PENALTY: 0.10,
 
   /** 所要時間のばらつき（対数正規の σ）。人の作業時間はおおむね対数正規 */
   TIME_SIGMA: 0.35,
@@ -115,11 +155,30 @@ const COG = {
   RUSH_THRESHOLD: 1.40,
   RUSH_STRENGTH: 1.60,
 
-  /** 数式を決めて計算に取りかかるまでの段取り時間（秒） */
-  PLANNING_TIME: 6.0,
+  /** 数式を決めて紙に書き始めるまでの段取り時間（秒） */
+  PLANNING_TIME: 8.5,
 
-  /** 正答率の上下限。1（=100%正解）には決してしない */
-  P_MAX: 0.98, P_MIN: 0.005,
+  // ---- 検算（手計算モデルの中核）----
+
+  /** 見直し1回にかかる時間は、初回計算の何倍か（同じ手順をなぞるので速い） */
+  RECHECK_FACTOR: 0.53,
+  /** これ以上見直しても集中力が持たない */
+  MAX_RECHECKS: 10,
+  /**
+   * 初回の誤りのうち「検算しても再現してしまう」割合。
+   *
+   * 検算で見つかるのは *うっかりミス*（桁を1つ書き落とした等）だけ。
+   * 手順そのものを取り違えていたら、何度なぞっても同じ答えになる。
+   * 難しい問題ほど後者の比率が上がるので、難易度スカラーの1次式で与える。
+   */
+  SYSTEMATIC_BASE: 0.13, SYSTEMATIC_SLOPE: 0.75,
+
+  /**
+   * 正答率の上下限。1（=100%正解）には決してしない。
+   * 手計算では「9×8 を5分かけて検算する」が 0.999 に達しうるので、
+   * 暗算前提の 0.98 では上が詰まる。
+   */
+  P_MAX: 0.999, P_MIN: 0.005,
 
   /**
    * 厳密(exact)以外のモードの正答率。
@@ -144,55 +203,61 @@ const COG = {
 // AIレベル（プロファイル）
 // ============================================================
 //
-//  wmCapacity     : 同時に保持できるチャンク数（Cowan の 4 が標準的な大人）
-//  speed          : 基準人を 1.0 とした処理速度
+//  wmCapacity     : 同時に保持できるチャンク数。紙に書けるぶん暗算より大きい
+//  speed          : 基準人（大学生）を 1.0 とした筆算の速度。
+//                   手を動かす速さなので、暗算ほど個人差が開かない
 //  logDecimals    : log10 をどれだけの小数桁で覚えているか
 //  factKnown      : n! を暗記している上限の n
-//  chainExponent  : a^9=(a^3)^3 のような効率的なべき乗手順を使えるか
+//  chainExponent  : a^9=((a^2)^2)^2·a のような効率的なべき乗手順を使えるか
 //  knowsStirling  : 巨大な階乗の桁数を見積もれるか
 //  knowsPowerTable: 2^n, 3^n などのべき表を持っているか
-//  slipRate       : 基本操作1回あたりのうっかりミス率
+//  slipRate       : 筆算1操作（部分積1個 / 1桁の加算）あたりのミス率
+//  checkRate      : 検算1回でうっかりミスに気づく確率  ← 手計算モデルの要
 //  stressTolerance: 時間切迫下でも手順を崩さない度合い（0..1）
-//  baseAccuracy   : 上限正答率（写し間違い等の下限ノイズ）
+//  baseAccuracy   : 上限正答率（清書時の写し間違い等、検算でも取れない下限ノイズ）
 //  aggression     : ベットの強気さ
 //  bluffRate      : 弱いハンドでも仕掛ける頻度
 //  riskAppetite   : 「大きいが当てにくい式」をどれだけ選びたがるか
+//
+// slipRate は「4桁×4桁の筆算1回を初回で間違える確率」から逆算してある。
+// 部分積+最終加算で 20 操作なので slipRate = 1 − (1 − p4x4)^(1/20)。
+//   中学生 30% / 高校生 18% / 大学生 10% / 競技者 6% / トップ 3.5%
 
 const AI_PROFILES = {
   novice: {
-    id: 'novice', name: '見習い', label: '初級',
-    wmCapacity: 2.5, speed: 0.70, logDecimals: 1, factKnown: 5,
+    id: 'novice', name: '中学生', label: '初級',
+    wmCapacity: 3.5, speed: 0.72, logDecimals: 1, factKnown: 5,
     chainExponent: false, knowsStirling: false, knowsPowerTable: false,
-    exactDigitCap: 6, slipRate: 0.030, stressTolerance: 0.30,
-    baseAccuracy: 0.90, aggression: 0.55, bluffRate: 0.05, riskAppetite: 0.25,
+    exactDigitCap: 12, slipRate: 0.01768, checkRate: 0.35, stressTolerance: 0.30,
+    baseAccuracy: 0.988, aggression: 0.55, bluffRate: 0.05, riskAppetite: 0.25,
   },
   casual: {
-    id: 'casual', name: '常連', label: '中級',
-    wmCapacity: 3.2, speed: 0.90, logDecimals: 2, factKnown: 6,
+    id: 'casual', name: '高校生', label: '中級',
+    wmCapacity: 4.5, speed: 0.88, logDecimals: 2, factKnown: 6,
     chainExponent: false, knowsStirling: false, knowsPowerTable: true,
-    exactDigitCap: 8, slipRate: 0.022, stressTolerance: 0.50,
-    baseAccuracy: 0.94, aggression: 0.80, bluffRate: 0.10, riskAppetite: 0.40,
+    exactDigitCap: 18, slipRate: 0.00987, checkRate: 0.48, stressTolerance: 0.45,
+    baseAccuracy: 0.994, aggression: 0.80, bluffRate: 0.10, riskAppetite: 0.40,
   },
   skilled: {
-    id: 'skilled', name: '計算屋', label: '上級',
-    wmCapacity: 4.0, speed: 1.15, logDecimals: 3, factKnown: 8,
+    id: 'skilled', name: '大学生（理系）', label: '上級',
+    wmCapacity: 5.5, speed: 1.00, logDecimals: 3, factKnown: 8,
     chainExponent: true, knowsStirling: true, knowsPowerTable: true,
-    exactDigitCap: 12, slipRate: 0.015, stressTolerance: 0.70,
-    baseAccuracy: 0.96, aggression: 1.00, bluffRate: 0.15, riskAppetite: 0.55,
+    exactDigitCap: 26, slipRate: 0.00525, checkRate: 0.62, stressTolerance: 0.60,
+    baseAccuracy: 0.9965, aggression: 1.00, bluffRate: 0.15, riskAppetite: 0.55,
   },
   expert: {
-    id: 'expert', name: '暗算名人', label: '達人',
-    wmCapacity: 5.0, speed: 1.50, logDecimals: 4, factKnown: 10,
+    id: 'expert', name: '競技者', label: '達人',
+    wmCapacity: 6.5, speed: 1.30, logDecimals: 4, factKnown: 10,
     chainExponent: true, knowsStirling: true, knowsPowerTable: true,
-    exactDigitCap: 16, slipRate: 0.010, stressTolerance: 0.85,
-    baseAccuracy: 0.975, aggression: 1.15, bluffRate: 0.20, riskAppetite: 0.70,
+    exactDigitCap: 34, slipRate: 0.00309, checkRate: 0.74, stressTolerance: 0.78,
+    baseAccuracy: 0.9985, aggression: 1.15, bluffRate: 0.20, riskAppetite: 0.70,
   },
   master: {
-    id: 'master', name: 'グランドマスター', label: '超人',
-    wmCapacity: 6.5, speed: 2.00, logDecimals: 5, factKnown: 12,
+    id: 'master', name: 'トップ競技者', label: '超人',
+    wmCapacity: 8.0, speed: 1.60, logDecimals: 5, factKnown: 12,
     chainExponent: true, knowsStirling: true, knowsPowerTable: true,
-    exactDigitCap: 20, slipRate: 0.006, stressTolerance: 0.95,
-    baseAccuracy: 0.985, aggression: 1.30, bluffRate: 0.22, riskAppetite: 0.85,
+    exactDigitCap: 44, slipRate: 0.00178, checkRate: 0.82, stressTolerance: 0.90,
+    baseAccuracy: 0.9993, aggression: 1.30, bluffRate: 0.22, riskAppetite: 0.85,
   },
 };
 
@@ -819,6 +884,9 @@ function _analyzeFormulaUncached(formula, profile) {
       : `規模(10↑↑x)申告が必要 — 正答率 ${(pMode * 100).toFixed(0)}%`);
   }
 
+  // pBase は「一発勝負（見直しなし・時間制限なし）の正答率」。
+  // 手計算モデルでは *天井ではない* — 検算で上がる余地があるので、
+  // 最終的な正答率は accuracyUnderTime() が pBase より上に出ることがある。
   const pBase = clamp(profile.baseAccuracy * pSteps * pWm * pMode, 0, COG.P_MAX);
 
   // ---- 難易度スカラー（誤答時の誤差分布に使う）----
@@ -853,11 +921,22 @@ function failed(src, error) {
 /**
  * 制限時間を与えて最終的な正答率を出す。
  *
- * 時間の効き方を2つに分解している:
+ * 時間の効き方を3つに分解している。3つ目が手計算モデルの中核。
+ *
  *   1. 間に合う確率  — 所要時間は対数正規に散らばる。P(T < 制限時間)。
- *   2. 焦り係数      — 間に合わせるために検算を飛ばすぶん、
- *                      手続きの誤り率が指数的に増幅される。
+ *   2. 焦り係数      — 間に合わせるために手順を省くぶん、
+ *                      初回の誤り率が指数的に増幅される。
  *                      増幅の強さは stressTolerance で緩和される。
+ *   3. **見直し**    — 余った時間で検算できる。紙に手が残っているから可能で、
+ *                      暗算モデルには無かった経路。これがあるので
+ *                      「時間さえあれば解ける式」がちゃんと解けるようになる。
+ *
+ * 見直しで消えるのは *うっかりミス* だけ。手順の思い違い（systematic）は
+ * 何度なぞっても同じ答えに着地するので残る。難しい式ほどその比率が高い。
+ *
+ *   初回誤り     err1 = 1 − pSteps^α
+ *   系統誤り     syst = err1 × (SYSTEMATIC_BASE + SYSTEMATIC_SLOPE × 難易度)
+ *   見直し後     errN = syst + (err1 − syst) × (1 − checkRate)^見直し回数
  *
  * @param {object} analysis analyzeFormula の戻り
  * @param {number} timeAvailable 秒
@@ -865,7 +944,10 @@ function failed(src, error) {
  */
 function accuracyUnderTime(analysis, timeAvailable, profile) {
   if (!analysis.ok) {
-    return { pCorrect: 0, pFinish: 0, rush: 1, ratio: 0, alpha: 1 };
+    return {
+      pCorrect: 0, pFinish: 0, rush: 1, ratio: 0, alpha: 1,
+      rechecks: 0, errFirst: 1, errAfter: 1, systematic: 1,
+    };
   }
 
   const req = Math.max(0.5, analysis.requiredTime);
@@ -880,17 +962,27 @@ function accuracyUnderTime(analysis, timeAvailable, profile) {
   const rush = clamp01(1 - ratio / COG.RUSH_THRESHOLD);
   const alpha = 1 + COG.RUSH_STRENGTH * rush * (2 - profile.stressTolerance);
 
-  const pSteps = Math.pow(clamp01(analysis.pSteps), alpha);
+  // 3) 見直し回数 — 初回を書き終えた残り時間を、検算1回ぶんの時間で割る
+  const checkCost = req * COG.RECHECK_FACTOR;
+  const rechecks = clamp(
+    Math.floor((avail - req) / Math.max(checkCost, 1e-6)), 0, COG.MAX_RECHECKS);
+
+  const errFirst = clamp01(1 - Math.pow(clamp01(analysis.pSteps), alpha));
+  const systShare = clamp01(
+    COG.SYSTEMATIC_BASE + COG.SYSTEMATIC_SLOPE * clamp01(analysis.difficulty));
+  const systematic = errFirst * systShare;
+  const errAfter = clamp01(
+    systematic + (errFirst - systematic) * Math.pow(1 - profile.checkRate, rechecks));
 
   // pMode が 0（厳密モード以外 / 解けない式）なら、時間をいくら積んでも当たらない。
   // ただし pFinish は「答えを書き上げること自体はできる」ので別に返す
   // （提出はするが不正解、という挙動を作るため）。
   const pCorrect = (analysis.pMode <= 0 || analysis.blocked) ? 0 : clamp(
-    profile.baseAccuracy * pFinish * pSteps * analysis.pWm * analysis.pMode,
+    profile.baseAccuracy * pFinish * (1 - errAfter) * analysis.pWm * analysis.pMode,
     COG.P_MIN, COG.P_MAX
   );
 
-  return { pCorrect, pFinish, rush, ratio, alpha };
+  return { pCorrect, pFinish, rush, ratio, alpha, rechecks, errFirst, errAfter, systematic };
 }
 
 /**

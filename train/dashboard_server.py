@@ -46,10 +46,10 @@ def log_file_for(level):
 # 学習モード名 → train.py に渡す追加引数
 # 認知プロファイル（＝相手にする「人間」の計算力）ごとに学習を分けられる。
 MODES = {
-    '上級（計算屋）': ['--level', 'skilled'],
-    '中級（常連）': ['--level', 'casual'],
-    '達人（暗算名人）': ['--level', 'expert'],
-    '初級（見習い）': ['--level', 'novice'],
+    '上級（大学生・理系）': ['--level', 'skilled'],
+    '中級（高校生）': ['--level', 'casual'],
+    '達人（競技者）': ['--level', 'expert'],
+    '初級（中学生）': ['--level', 'novice'],
 }
 
 # グラフ・表に出す指標。
