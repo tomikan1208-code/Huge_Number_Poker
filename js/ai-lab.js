@@ -584,7 +584,10 @@
     const items = [
       ['所要時間（初回）', formatSeconds(a.requiredTime)],
       ['うち計算', formatSeconds(a.calcTime || 0)],
-      ['うち操作＋入力', formatSeconds((a.setupTime || 0) + (a.transcribe || 0))],
+      ['うち式を組む', formatSeconds(a.setupTime || 0)],
+      ['うち答えの入力', formatSeconds(a.transcribe || 0)],
+      ['置くカード', a.layout ? `${a.layout.cards} 枚` +
+        (a.layout.parens ? ` ＋括弧${a.layout.parens}` : '') : '–'],
       ['与えた時間', formatSeconds(cond.seconds)],
       ['余裕比 ratio', acc.ratio.toFixed(2)],
       ['間に合う確率', acc.pFinish.toFixed(3)],
@@ -719,7 +722,8 @@
     ['SYSTEMATIC_SLOPE', '同・難易度の効き', 0.05],
     ['MUL_RECALL_PER_PARTIAL', '筆算中の九九1回（秒）', 0.02],
     ['ADD_PER_COLUMN', '部分積を足す1桁ぶん（秒）', 0.02],
-    ['SETUP_TIME', '式制作＋回答入力（秒）', 1],
+    ['SETUP_BASE', '式を組む基礎時間（秒）', 0.5],
+    ['SETUP_PER_CARD', 'カード1枚を置く（秒）', 0.1],
     ['WRITE_PER_DIGIT', '数字1文字を書く秒数', 0.05],
     ['TIME_SIGMA', '所要時間のばらつき σ', 0.05],
     ['RUSH_THRESHOLD', '焦り始める余裕比', 0.05],

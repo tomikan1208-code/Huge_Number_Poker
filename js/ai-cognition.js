@@ -170,15 +170,20 @@ const COG = {
   RUSH_STRENGTH: 1.60,
 
   /**
-   * 式を組み立てる操作 ＋ 答えを入力欄に打ち込む操作にかかる固定費（秒）。
+   * 式を組み立てる操作（カードを1枚ずつ置く）にかかる時間（秒）。
    *
-   * 計算そのものではなく **画面の操作**なので、
-   *   ・式の難しさに依らず一定
-   *   ・計算の速さ（profile.speed）でも割らない
-   *     — 競技者だからカードを1.6倍速くドラッグできるわけではない
+   *   SETUP_BASE + SETUP_PER_CARD × 置く枚数
+   *
+   * 計算そのものではなく **画面の操作**なので、計算の速さ（profile.speed）では
+   * 割らない — 競技者だからカードを1.6倍速くドラッグできるわけではない。
+   * 括弧は常設ツールから取るだけなので半分の重みで数える。
+   *
+   * 標準的な4枚の式でちょうど 10秒 になるように置いてある:
+   *   2枚 7.7秒 ／ 3枚 8.8秒 ／ 4枚 9.9秒 ／ 5枚 11.0秒 ／ 5枚＋括弧2つ 12.1秒
+   *
    * 答えの桁数に比例する入力時間は WRITE_PER_DIGIT で別に計上する。
    */
-  SETUP_TIME: 10.0,
+  SETUP_BASE: 5.5, SETUP_PER_CARD: 1.1,
 
   // ---- 検算（手計算モデルの中核）----
 
@@ -679,6 +684,28 @@ function mulStep(ctx, profile, d1, d2, sig1, sig2, label, opts) {
   return { time: bd.total, risk };
 }
 
+/**
+ * 式を組むのに何枚置くかを数える。
+ *
+ * 数字・演算子は手札から1枚ずつドラッグする。括弧は常設ツールから取るだけで
+ * 枚数制限にも入らないので、操作の手間としては半分に見積もる。
+ */
+function countLayout(node) {
+  let cards = 0, parens = 0;
+  const walk = (n) => {
+    if (!n) return;
+    switch (n.type) {
+      case 'number': cards += 1; break;
+      case 'group': parens += 2; walk(n.inner); break;   // ( と ) の2枚を置く
+      case 'unary': cards += 1; walk(n.operand); break;
+      case 'binary': cards += 1; walk(n.left); walk(n.right); break;
+      default: break;
+    }
+  };
+  try { walk(node); } catch (e) { /* 数えられなければ 0 のまま */ }
+  return { cards, parens, weight: cards + parens * 0.5 };
+}
+
 /** 値を短く表示する（記録のラベル用） */
 function briefValue(v) {
   if (v === null || v === undefined) return '?';
@@ -1105,17 +1132,23 @@ function _analyzeFormulaUncached(formula, profile) {
     children: s.children ? s.children.map(scaleStep) : null,
   });
 
+  // ---- 式を組む操作 ----
+  // 置くカードが多いほど手間がかかる。括弧は常設ツールから取るだけなので半分。
+  const layout = countLayout(ast);
+  const setupTime = COG.SETUP_BASE + COG.SETUP_PER_CARD * layout.weight;
+
   const trace = [
     {
-      kind: 'setup', risk: 0, time: COG.SETUP_TIME,
-      label: '式を組む（カードを並べる）＋ 答えの入力欄へ',
+      kind: 'setup', risk: 0, time: setupTime,
+      label: `式を組む（カード ${layout.cards} 枚` +
+        `${layout.parens > 0 ? ` ＋ 括弧 ${layout.parens} 個` : ''}を並べる）`,
     },
     {
       kind: 'calc', risk: clamp01(1 - clamp01(root.ok)), time: calcTime,
       label: '計算する', children: ctx.trace.map(scaleStep),
     },
   ];
-  time += COG.SETUP_TIME;
+  time += setupTime;
 
   if (transcribe > 0) {
     trace.push({
@@ -1165,7 +1198,7 @@ function _analyzeFormulaUncached(formula, profile) {
 
   const out = {
     ok: true, formula: src, value, answerMode,
-    requiredTime: time, calcTime, setupTime: COG.SETUP_TIME, transcribe, trace,
+    requiredTime: time, calcTime, setupTime, transcribe, trace, layout,
     wmPeak, wmOverload,
     pSteps, pWm, pMode, pBase, difficulty,
     blocked: root.blocked, sigma: root.sigma, switches, notes,
@@ -1177,6 +1210,7 @@ function failed(src, error) {
   return {
     ok: false, formula: src, value: null, answerMode: 'exact', error,
     requiredTime: COG.MAX_TIME, calcTime: COG.MAX_TIME, setupTime: 0, transcribe: 0, trace: [],
+    layout: { cards: 0, parens: 0, weight: 0 },
     wmPeak: 99, wmOverload: 99,
     pSteps: 0, pWm: 0, pMode: 0, pBase: 0, difficulty: 1,
     blocked: true, sigma: Infinity, switches: 0, notes: ['数式として無効'],
