@@ -166,7 +166,8 @@ function startGame() {
     betTimeLimit: parseInt($('bet-time-limit').value, 10) || 10,
     dealerTimeLimit: parseInt($('dealer-time-limit').value, 10) || 20,
     levelUpHands: parseInt($('level-up-hands').value, 10) || 5,
-    deckCount: parseInt($('deck-count').value, 10) || 1,
+    // 人数に対してデッキが足りなければ勝手に増やす（足りないと手札が7枚に満たない）
+    deckCount: Math.max(parseInt($('deck-count').value, 10) || 1, decksNeededFor(playerCount)),
     autoCalcMode: $('auto-calc-mode').checked,
   };
 
@@ -785,8 +786,37 @@ function submitFormula() {
 // ショーダウン
 // ============================================================
 
+/** ゲーム終了。最終順位を出して打ち止めにする */
+function showGameOver() {
+  if (!game) return;
+  const standings = game.finalStandings();
+
+  $('showdown-title').textContent = '🎉 ゲーム終了';
+  const list = $('showdown-list');
+  list.innerHTML = '';
+  buildStandingsList(standings).forEach(el => list.appendChild(el));
+
+  const winnerDiv = $('showdown-winner');
+  winnerDiv.innerHTML = '';
+  const n = document.createElement('div');
+  n.className = 'winner-name';
+  n.textContent = standings[0] ? `🏆 優勝: ${standings[0].name}` : '🏆 優勝者なし';
+  const a = document.createElement('div');
+  a.className = 'winner-amount';
+  a.textContent = standings[0] ? `最終チップ ${standings[0].chips}` : '';
+  winnerDiv.append(n, a);
+
+  const btn = $('btn-next-hand');
+  btn.textContent = 'ホームに戻る';
+  btn.onclick = () => { $('showdown-overlay').classList.add('hidden'); showView('home'); };
+
+  gameAudio.playWin();
+  $('showdown-overlay').classList.remove('hidden');
+}
+
 function showShowdown() {
   if (!game) return;
+  $('showdown-title').textContent = '🏆 ショーダウン';
   const list = $('showdown-list');
   list.innerHTML = '';
 
@@ -816,7 +846,9 @@ function showShowdown() {
     gameAudio.playLose();
   }
 
-  $('btn-next-hand').textContent = '次のハンドへ';
+  const btn = $('btn-next-hand');
+  btn.textContent = '次のハンドへ';
+  btn.onclick = null; // ゲーム終了画面で付けた「ホームに戻る」を外す
   $('showdown-overlay').classList.remove('hidden');
 }
 
@@ -883,9 +915,8 @@ function nextHand() {
   game.settle();
 
   if (game.isGameOver()) {
-    const winner = game.players[0];
-    showNotification(`ゲーム終了！ ${winner ? winner.name : '—'} の勝利！`);
     renderGame();
+    showGameOver();
     return;
   }
 
@@ -1159,6 +1190,7 @@ function showSoloResult(score, systemValue) {
 
   const btn = $('btn-next-hand');
   btn.textContent = 'もう一度プレイ';
+  btn.onclick = null; // ゲーム終了画面で付けた「ホームに戻る」を外す
   $('showdown-overlay').classList.remove('hidden');
 }
 

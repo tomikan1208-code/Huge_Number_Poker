@@ -11,7 +11,8 @@ const { Server } = require('socket.io');
 const path = require('path');
 
 // ゲームロジックを読み込み
-const { Game, PHASES, DEFAULT_CONFIG, buildDeck, shuffle } = require('./js/game.js');
+const crypto = require('crypto');
+const { Game, PHASES, DEFAULT_CONFIG, buildDeck, shuffle, decksNeededFor } = require('./js/game.js');
 const { HugeNumber, FormulaEvaluator } = require('./js/engine.js');
 
 const app = express();
@@ -52,14 +53,12 @@ app.use((req, res) => res.status(404).type('text/plain').send('Not Found'));
 
 const rooms = new Map(); // roomId -> Room
 
-// テーブルの上限。これとは別に、開始時に「デッキが足りるか」も見る。
+// テーブルの上限。デッキ数は人数に合わせて自動で増やすので、ここだけ見ればよい。
 const MAX_ROOM_PLAYERS = 8;
-const CARDS_PER_HAND = 7;
-const CARDS_PER_DECK = 54; // 数字32 + 演算子22
 
-/** デッキ数から何人まで配れるか */
-function seatCapacity(deckCount) {
-  return Math.floor((CARDS_PER_DECK * Math.max(1, deckCount)) / CARDS_PER_HAND);
+/** 席の持ち主だけが再入室できるようにするための秘密の合言葉 */
+function genSeatToken() {
+  return crypto.randomBytes(16).toString('hex');
 }
 
 /*
@@ -98,7 +97,8 @@ function createRoom(roomId, hostSocket, hostName) {
       index: 0,
       isHost: true,
       connected: true,
-      role: 'player'
+      role: 'player',
+      token: genSeatToken(),
     }],
     spectators: [],
     started: false,
@@ -168,12 +168,27 @@ function inheritHost(room) {
   return false;
 }
 
-function findPlayerByName(room, name) {
-  const p = room.players.find(p => p.name === name && !p.connected);
-  if (p) return { entry: p, list: 'players' };
-  const s = room.spectators.find(s => s.name === name && !s.connected);
-  if (s) return { entry: s, list: 'spectators' };
-  return null;
+/**
+ * 再入室する席を探す。
+ *
+ * ゲーム開始後は「席のトークンを持っている人」だけが戻れる。
+ * 名前の一致だけで通していた頃は、部屋コードと切断中の人の名前さえ知っていれば
+ * その席を乗っ取って手札を見られた。
+ * 開始前のロビーは見られて困る情報が無いので、名前一致でも入れるままにしてある。
+ */
+function findSeat(room, { token, name }) {
+  const all = [...room.players, ...room.spectators];
+
+  if (token) {
+    const byToken = all.find(e => e.token === token && !e.connected);
+    if (byToken) return { entry: byToken, matchedBy: 'token' };
+    // トークンはあるが席が無い（部屋が作り直された等）→ 新規参加として扱う
+    return null;
+  }
+
+  if (room.started) return null; // 進行中はトークン必須
+  const byName = all.find(e => e.name === name && !e.connected);
+  return byName ? { entry: byName, matchedBy: 'name' } : null;
 }
 
 function reindexPlayers(room) {
@@ -248,7 +263,10 @@ function makeGameStateForClient(room, clientSocketId) {
     calculationTimeLimit: game.calculationTimeLimit,
     autoCalcMode: !!game.config.autoCalcMode,
     gameOver: game.isGameOver(),
-    deadline: room.deadline || null,
+    standings: game.isGameOver() ? game.finalStandings() : null,
+    // 締切は「あと何ミリ秒か」で送る。絶対時刻(epoch)を送ると、
+    // 端末の時計がずれているぶんだけタイマーがそのままずれる。
+    remainingMs: room.deadline ? Math.max(0, room.deadline - Date.now()) : null,
   };
 }
 
@@ -520,12 +538,14 @@ io.on('connection', (socket) => {
       roomCode: roomId,
       playerIndex: 0,
       isHost: true,
+      myRole: 'player',
+      seatToken: room.players[0].token,
       roomState: makeRoomState(room),
     });
   });
 
   // ===== 部屋参加 / 再入室 =====
-  socket.on('join-room', ({ roomCode, playerName, asSpectator }, callback) => {
+  socket.on('join-room', ({ roomCode, playerName, asSpectator, seatToken }, callback) => {
     const roomId = roomCode ? roomCode.toUpperCase() : '';
     const room = rooms.get(roomId);
     const name = sanitizeName(playerName, `Guest-${socket.id.slice(0, 4)}`);
@@ -541,14 +561,15 @@ io.on('connection', (socket) => {
     }
 
     // 再入室判定
-    const rejoin = findPlayerByName(room, name);
+    const rejoin = findSeat(room, { token: seatToken, name });
     if (rejoin) {
       const entry = rejoin.entry;
       entry.id = socket.id;
       entry.connected = true;
+      if (!entry.token) entry.token = genSeatToken();
       socket.join(roomId);
       socket.data.roomId = roomId;
-      socket.data.playerName = name;
+      socket.data.playerName = entry.name;
 
       if (entry.isHost) room.hostId = socket.id;
 
@@ -558,12 +579,13 @@ io.on('connection', (socket) => {
         playerIndex: entry.index,
         isHost: entry.isHost,
         myRole: entry.role,
+        seatToken: entry.token,
         roomState: makeRoomState(room),
         isRejoin: true,
       });
 
       socket.to(roomId).emit('opponent-disconnected', {
-        playerName: name,
+        playerName: entry.name,
         reason: 'rejoin'
       });
 
@@ -591,12 +613,15 @@ io.on('connection', (socket) => {
     socket.data.roomId = roomId;
     socket.data.playerName = name;
 
+    const token = genSeatToken();
+
     if (asSpectator) {
       room.spectators.push({
         id: socket.id,
         name,
         connected: true,
-        role: 'spectator'
+        role: 'spectator',
+        token,
       });
       callback?.({
         ok: true,
@@ -604,6 +629,7 @@ io.on('connection', (socket) => {
         playerIndex: -1,
         isHost: false,
         myRole: 'spectator',
+        seatToken: token,
         roomState: makeRoomState(room),
       });
     } else {
@@ -614,7 +640,8 @@ io.on('connection', (socket) => {
         index,
         isHost: false,
         connected: true,
-        role: 'player'
+        role: 'player',
+        token,
       });
       callback?.({
         ok: true,
@@ -622,6 +649,7 @@ io.on('connection', (socket) => {
         playerIndex: index,
         isHost: false,
         myRole: 'player',
+        seatToken: token,
         roomState: makeRoomState(room),
       });
     }
@@ -647,25 +675,27 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const deckCount = Math.max(1, Math.min(3, parseInt(settings?.deckCount, 10) || 1));
-    const capacity = seatCapacity(deckCount);
-    if (room.players.length > capacity) {
-      callback?.({
-        ok: false,
-        error: `${room.players.length}人には ${deckCount}デッキでは足りません（このデッキ数で最大 ${capacity}人）`,
-      });
-      return;
-    }
+    // 人数に対してデッキが足りなければ、勝手に増やす。
+    // 足りないまま始めると _draw() が null を返し、黙って手札が6枚・5枚になる。
+    const asked = Math.max(1, Math.min(3, parseInt(settings?.deckCount, 10) || 1));
+    const needed = decksNeededFor(room.players.length);
+    const deckCount = Math.max(asked, needed);
+    const adjusted = deckCount !== asked;
 
     room.started = true;
     room.readyForNext.clear();
-    startGame(room, settings || {});
+    startGame(room, { ...(settings || {}), deckCount });
+
+    if (adjusted) {
+      room.game._log(`${room.players.length}人には ${asked}デッキでは足りないため、${deckCount}デッキに増やしました`);
+      console.log(`[デッキ自動調整] ${roomId}: ${asked} -> ${deckCount} (${room.players.length}人)`);
+    }
 
     console.log(`[ゲーム開始] ${roomId}: ${room.players.length}人`);
     // 1人分の状態を部屋全体に配ると、その人の手札が全員に見えてしまう。
     // 必ず1人ずつ、その人向けに整形した状態を送る。
     emitPerClient(room, 'game-started');
-    callback?.({ ok: true });
+    callback?.({ ok: true, deckCount, deckAdjusted: adjusted });
   });
 
   // ===== ゲームアクション =====

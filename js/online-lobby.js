@@ -112,34 +112,41 @@ function switchToGame() {
 }
 
 // ===== 再入室の記憶 =====
-// リロードやタブの復帰でゲームから弾き出されないよう、部屋と名前を覚えておく。
+// リロードやタブの復帰でゲームから弾き出されないよう、席の情報を覚えておく。
+// seatToken は「その席の持ち主である証明」なので、他人に渡らない localStorage に置く
+// （sessionStorage だとタブを開き直しただけで席に戻れなくなる）。
 const REJOIN_KEY = 'hnp-rejoin';
 
-function rememberSeat(roomCode, playerName, asSpectator) {
+function rememberSeat() {
   try {
-    sessionStorage.setItem(REJOIN_KEY, JSON.stringify({ roomCode, playerName, asSpectator }));
+    localStorage.setItem(REJOIN_KEY, JSON.stringify({
+      roomCode: om.roomCode,
+      playerName: om.playerName,
+      asSpectator: om.myRole === 'spectator',
+      seatToken: om.seatToken,
+    }));
   } catch (e) { /* プライベートモードなどでは諦める */ }
 }
 
 function forgetSeat() {
-  try { sessionStorage.removeItem(REJOIN_KEY); } catch (e) { /* noop */ }
+  try { localStorage.removeItem(REJOIN_KEY); } catch (e) { /* noop */ }
 }
 
 function savedSeat() {
-  try { return JSON.parse(sessionStorage.getItem(REJOIN_KEY) || 'null'); } catch (e) { return null; }
+  try { return JSON.parse(localStorage.getItem(REJOIN_KEY) || 'null'); } catch (e) { return null; }
 }
 
 // ===== Socket.ioコールバック =====
 om.init({
   onRoomCreated: ({ roomCode, roomState }) => {
-    rememberSeat(roomCode, om.playerName, false);
+    rememberSeat();
     switchToLobby(roomCode);
     renderLobby(roomState);
     showStatus('部屋を作成しました。参加者を待っています...');
   },
 
   onRoomJoined: ({ roomCode, roomState, isRejoin }) => {
-    rememberSeat(roomCode, om.playerName, om.myRole === 'spectator');
+    rememberSeat();
     switchToLobby(roomCode);
     renderLobby(roomState);
 
@@ -156,6 +163,7 @@ om.init({
 
   onRoomState: (roomState) => {
     renderLobby(roomState);
+    if (window.handleOnlineRoomState) window.handleOnlineRoomState();
   },
 
   onGameStarted: ({ gameState, roomState }) => {
@@ -181,10 +189,12 @@ om.init({
 
   onJoinError: (msg) => {
     forgetSeat();
+    lobbyWaiting?.classList.add('hidden');
+    lobbyMain?.classList.remove('hidden');
     const jpMsg = {
       'Room is full': `部屋が満員です（最大${MAX_ROOM_PLAYERS}人）`,
       'Room not found': '部屋が見つかりません',
-      'Game already started': 'ゲームが既に開始されています（観戦なら入れます）',
+      'Game already started': '進行中の部屋です。観戦でなら入れます',
     }[msg] || msg;
     showStatus(jpMsg, true);
   },
@@ -273,7 +283,7 @@ nameInput?.addEventListener('keydown', (e) => {
   if (nameInput) nameInput.value = seat.playerName;
   if (codeInput) codeInput.value = seat.roomCode;
   showStatus(`部屋 ${seat.roomCode} に復帰しています...`);
-  om.joinRoom(seat.roomCode, seat.playerName, !!seat.asSpectator);
+  om.joinRoom(seat.roomCode, seat.playerName, !!seat.asSpectator, seat.seatToken);
 })();
 
 // 中央通知

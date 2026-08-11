@@ -102,6 +102,34 @@ function buildPotBreakdown(settlement, nameOf) {
   return rows;
 }
 
+/**
+ * ゲーム終了時の最終順位表を組み立てる。
+ * ローカル対戦とオンラインで同じ見た目にするため共通化している。
+ *
+ * @param {{name:string, chips:number, isEliminated:boolean}[]} standings チップの多い順
+ * @param {number} [myIndexInList] 自分の行を強調したいときの添字
+ */
+function buildStandingsList(standings) {
+  const rows = [];
+  (standings || []).forEach((s, i) => {
+    const item = document.createElement('div');
+    item.className = 'showdown-item';
+    if (i === 0) item.classList.add('winner-item');
+
+    const rank = document.createElement('div');
+    rank.className = 'sd-player';
+    rank.textContent = `${i + 1}位  ${s.name}`;
+
+    const chips = document.createElement('div');
+    chips.className = 'sd-result';
+    chips.textContent = s.isEliminated ? '脱落' : `💰 ${s.chips}`;
+
+    item.append(rank, chips);
+    rows.push(item);
+  });
+  return rows;
+}
+
 class FormulaBuilder {
   /**
    * @param {Object} opts
@@ -548,4 +576,5 @@ if (typeof window !== 'undefined') {
   window.prefersReducedMotion = prefersReducedMotion;
   window.createStandardCardElement = createStandardCardElement;
   window.buildPotBreakdown = buildPotBreakdown;
+  window.buildStandingsList = buildStandingsList;
 }

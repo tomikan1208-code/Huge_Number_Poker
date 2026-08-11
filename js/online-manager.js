@@ -13,6 +13,8 @@ class OnlineManager {
     this.myRole = 'player';
     this.roomState = null;
     this.callbacks = {};
+    // 席の所有証明。これを持っている人だけが進行中の部屋に戻れる。
+    this.seatToken = null;
   }
 
   init(callbacks) {
@@ -33,8 +35,11 @@ class OnlineManager {
     this.socket.emit('create-room', { playerName: this.playerName });
   }
 
-  /** 部屋に参加（同じ名前で入れば再入室扱い） */
-  joinRoom(roomCode, playerName, asSpectator = false) {
+  /**
+   * 部屋に参加。
+   * seatToken を渡すと、その席の持ち主として再入室する（進行中の部屋はトークン必須）。
+   */
+  joinRoom(roomCode, playerName, asSpectator = false, seatToken = null) {
     this.connect();
     this.roomCode = roomCode.toUpperCase();
     this.isHost = false;
@@ -43,7 +48,8 @@ class OnlineManager {
     this.socket.emit('join-room', {
       roomCode: this.roomCode,
       playerName: this.playerName,
-      asSpectator
+      asSpectator,
+      seatToken: seatToken || undefined,
     }, (res) => {
       if (!res?.ok) {
         if (this.callbacks.onJoinError) this.callbacks.onJoinError(res?.error || '参加に失敗しました');
@@ -52,6 +58,7 @@ class OnlineManager {
       this.playerIndex = res.playerIndex ?? -1;
       this.isHost = res.isHost ?? false;
       this.myRole = res.myRole || 'player';
+      this.seatToken = res.seatToken || this.seatToken;
       if (res.roomState) this.roomState = res.roomState;
       if (this.callbacks.onRoomJoined) this.callbacks.onRoomJoined(res);
     });
@@ -83,12 +90,16 @@ class OnlineManager {
 
   _setupListeners() {
     // 部屋作成完了
-    this.socket.on('room-created', ({ roomCode, playerIndex, isHost, roomState }) => {
+    this.socket.on('room-created', ({ roomCode, playerIndex, isHost, seatToken, roomState }) => {
       this.roomCode = roomCode;
       this.playerIndex = playerIndex;
       this.isHost = isHost;
+      this.myRole = 'player';
+      this.seatToken = seatToken || null;
       this.roomState = roomState;
-      if (this.callbacks.onRoomCreated) this.callbacks.onRoomCreated({ roomCode, playerIndex, isHost, roomState });
+      if (this.callbacks.onRoomCreated) {
+        this.callbacks.onRoomCreated({ roomCode, playerIndex, isHost, seatToken, roomState });
+      }
     });
 
     // 部屋状態更新

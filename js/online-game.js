@@ -20,6 +20,7 @@
   let builder = null;
   let timerInterval = null;
   let lastPhase = null;
+  let gameOverShown = false;
 
   const PHASE_NAMES = {
     SETTING: '設定', DEALING: '配札中', BETTING_1: 'ベットラウンド1',
@@ -150,7 +151,15 @@
     renderLog();
     syncTimer();
 
-    if (gameState.phase === 'SHOWDOWN') showShowdown();
+    if (gameState.gameOver) showGameOver();
+    else if (gameState.phase === 'SHOWDOWN') showShowdown();
+  }
+
+  /** その席が今つながっているか（room-state 側の情報） */
+  function isConnected(idx) {
+    const rs = mgr.roomState;
+    if (!rs || !rs.players || !rs.players[idx]) return true;
+    return rs.players[idx].connected !== false;
   }
 
   function renderOpponents() {
@@ -189,6 +198,16 @@
       bet.textContent = `ベット: ${p.currentBet}`;
 
       seat.append(name, chips, bet);
+
+      // 切断中の相手は、卓の上でも分かるようにする
+      // （毎回フォールドしてくるのが放置なのか回線なのか区別できない）
+      if (!isConnected(idx)) {
+        seat.classList.add('disconnected');
+        const d = document.createElement('div');
+        d.className = 'seat-disconnected';
+        d.textContent = '⚠ 切断中';
+        name.appendChild(d);
+      }
 
       let status = '', cls = '';
       if (!p.isActive) { status = 'フォールド'; cls = 'folded-text'; }
@@ -413,6 +432,7 @@
   // ============================================================
 
   function showShowdown() {
+    $('online-showdown-title').textContent = '🏆 ショーダウン';
     const list = $('online-showdown-list');
     list.innerHTML = '';
 
@@ -450,6 +470,40 @@
     $('online-showdown-overlay').classList.remove('hidden');
   }
 
+  /** ゲーム終了。最終順位を出して、ここで打ち止めにする */
+  function showGameOver() {
+    const standings = gameState.standings || [];
+    $('online-showdown-title').textContent = '🎉 ゲーム終了';
+
+    const list = $('online-showdown-list');
+    list.innerHTML = '';
+    buildStandingsList(standings).forEach(el => list.appendChild(el));
+
+    const winnerDiv = $('online-showdown-winner');
+    winnerDiv.innerHTML = '';
+    const n = document.createElement('div');
+    n.className = 'winner-name';
+    n.textContent = standings[0] ? `🏆 優勝: ${standings[0].name}` : '🏆 優勝者なし';
+    const a = document.createElement('div');
+    a.className = 'winner-amount';
+    a.textContent = standings[0] ? `最終チップ ${standings[0].chips}` : '';
+    winnerDiv.append(n, a);
+
+    const btn = $('online-btn-next-hand');
+    btn.textContent = 'ホームに戻る';
+    btn.disabled = false;
+    btn.onclick = () => {
+      if (window.forgetSeat) window.forgetSeat(); // 終わった部屋に自動復帰しない
+      location.href = 'index.html';
+    };
+
+    if (!gameOverShown) {
+      gameOverShown = true;
+      gameAudio.playWin();
+    }
+    $('online-showdown-overlay').classList.remove('hidden');
+  }
+
   /** 「次のハンドへ」に、あと何人待っているかを出す */
   function renderNextHandButton() {
     const btn = $('online-btn-next-hand');
@@ -457,6 +511,7 @@
 
     const info = gameState.nextHand || { ready: [], needed: 0 };
     const iAmReady = info.ready.includes(myPlayerIndex);
+    btn.onclick = null; // ゲーム終了画面で付けた「ホームに戻る」を外す
 
     if (isSpectator) {
       btn.textContent = '観戦中';
@@ -530,19 +585,25 @@
   // タイマー（サーバーの締切時刻に同期）
   // ============================================================
 
+  /**
+   * サーバーは「あと何ミリ秒か」を送ってくる。それを受け取った瞬間に
+   * こちらの時計で締切へ直す。絶対時刻(epoch)で受け取ると、端末の時計が
+   * ずれているぶんだけタイマーがずれてしまう。
+   */
   function syncTimer() {
     const display = $('online-timer');
-    const deadline = gameState.deadline;
+    const remainingMs = gameState.remainingMs;
 
-    if (!deadline) {
+    if (remainingMs == null) {
       display.classList.add('hidden');
       if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
       return;
     }
 
+    const localDeadline = Date.now() + remainingMs;
     display.classList.remove('hidden');
     const tick = () => {
-      const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      const remaining = Math.max(0, Math.ceil((localDeadline - Date.now()) / 1000));
       display.textContent = `⏱ ${remaining}`;
       display.classList.toggle('urgent', remaining <= 5);
       if (remaining <= 0 && timerInterval) { clearInterval(timerInterval); timerInterval = null; }
@@ -628,6 +689,9 @@
 
   window.initOnlineGame = initOnlineGame;
   window.handleOnlineGameUpdate = handleOnlineGameUpdate;
+  // 切断・再入室は room-state だけで飛んでくる（ゲーム状態は変わらない）ので、
+  // ここでも卓を描き直さないと「切断中」表示が次のアクションまで出ない。
+  window.handleOnlineRoomState = () => { if (gameState) render(); };
   window.handleOnlineFullStateSync = handleOnlineGameUpdate;
   window.handleOnlineChat = (data) => notify(`${data.from}: ${data.message}`);
 })();

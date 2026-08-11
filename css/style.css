@@ -459,6 +459,19 @@ body {
   opacity: 0.4;
 }
 
+/* 切断中。放置なのか回線なのかを卓の上で見分けられるようにする */
+.player-seat.disconnected {
+  border-color: rgba(232, 85, 85, 0.5);
+  border-style: dashed;
+}
+
+.player-seat .seat-disconnected {
+  font-size: 0.7rem;
+  font-weight: normal;
+  color: var(--danger);
+  margin-top: 0.15rem;
+}
+
 .player-seat.winner {
   border-color: var(--gold);
   box-shadow: 0 0 20px rgba(245, 200, 66, 0.5);
@@ -1615,6 +1628,11 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   flex-wrap: wrap;
+}
+
+.settings-box .settings-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 .settings-box input[type="number"] {

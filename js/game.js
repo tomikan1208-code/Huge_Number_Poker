@@ -28,6 +28,15 @@ const CARD_DEFS = {
 
 const HAND_SIZE = 7;
 const MAX_FORMULA_CARDS = 5;
+const CARDS_PER_DECK = 54; // 数字 8種×4枚=32 ＋ 演算子 22枚
+
+/**
+ * 全員に7枚配りきるのに必要なデッキ数。
+ * 足りないと _draw() が null を返し、黙って手札が6枚・5枚になる。
+ */
+function decksNeededFor(playerCount) {
+  return Math.max(1, Math.ceil((playerCount * HAND_SIZE) / CARDS_PER_DECK));
+}
 
 function buildDeck(deckCount = 1) {
   const deck = [];
@@ -170,6 +179,13 @@ class Game {
   activePlayers() { return this.players.filter(p => !p.isEliminated && p.isActive); }
 
   isGameOver() { return this.gameOver || this.livePlayers().length <= 1; }
+
+  /** 最終順位（チップの多い順。脱落者も含めて全員返す） */
+  finalStandings() {
+    return this.players
+      .map((p, index) => ({ index, name: p.name, chips: p.chips, isEliminated: p.isEliminated }))
+      .sort((a, b) => b.chips - a.chips);
+  }
 
   // ============================================================
   // ハンド進行
@@ -869,7 +885,10 @@ class Game {
 
 // エクスポート
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { Game, PHASES, DEFAULT_CONFIG, buildDeck, shuffle, CARD_DEFS, MAX_FORMULA_CARDS, HAND_SIZE };
+  module.exports = {
+    Game, PHASES, DEFAULT_CONFIG, buildDeck, shuffle, CARD_DEFS,
+    MAX_FORMULA_CARDS, HAND_SIZE, CARDS_PER_DECK, decksNeededFor,
+  };
 }
 if (typeof window !== 'undefined') {
   window.Game = Game;
@@ -878,4 +897,5 @@ if (typeof window !== 'undefined') {
   window.CARD_DEFS = CARD_DEFS;
   window.MAX_FORMULA_CARDS = MAX_FORMULA_CARDS;
   window.HAND_SIZE = HAND_SIZE;
+  window.decksNeededFor = decksNeededFor;
 }
