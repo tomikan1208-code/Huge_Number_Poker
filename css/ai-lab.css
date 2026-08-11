@@ -613,6 +613,61 @@ html { background: var(--bg-primary); }
   padding: 0.5rem 0;
 }
 
+/* ---------- 手札タブの中のサブタブ ---------- */
+/*
+ * シーンが4つある（交換前のベット / 交換 / 交換後のベット / 候補と比較）。
+ * 縦に全部並べると1画面に収まらず、どこを見ればいいのか分からなくなるので分ける。
+ * 上のタブ（式テスト / 手札テスト）とは見た目を変えて、階層を取り違えないようにする。
+ */
+.lab-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 0.9rem;
+}
+
+.lab-subtab {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.lab-subtab:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.lab-subtab.active {
+  background: var(--accent, #6c5ce7);
+  border-color: transparent;
+  color: #fff;
+  font-weight: bold;
+}
+
+.lab-scene-summary {
+  font-size: 0.85rem;
+  line-height: 1.8;
+  color: var(--text-secondary);
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.85rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+}
+
+.lab-log-head {
+  list-style: none;
+  margin-left: -1.2rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  margin-top: 0.5rem;
+}
+
 /* ---------- 仮想の卓での判断 ---------- */
 
 .lab-reason {

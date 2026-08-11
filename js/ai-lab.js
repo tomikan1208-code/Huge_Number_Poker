@@ -903,67 +903,33 @@
         </tr>`;
     }).join('');
 
-    // ---- 仮想の卓での判断 ----
-    renderTableDecision(state.hand, cond, profile, model);
+    // ---- 仮想の卓で1ハンド回す ----
+    const table = readTableConditions();
+    const sim = simulateHand(state.hand, cond, table);
+    renderBetScene('r1', sim.r1);
+    renderBetScene('r2', sim.r2);
+    renderExchangeScene(sim, cond, profile, model);
+
+    $('r2-log').innerHTML = sim.log.map((l) => {
+      const isHeader = l.startsWith('──');
+      return `<li class="${isHeader ? 'lab-log-head' : ''}">${esc(l)}</li>`;
+    }).join('') || '<li class="lab-muted">行動なし</li>';
+
+    const parts = [];
+    parts.push(table.mode === 'auto'
+      ? `相手（${esc(COGN.getProfile(table.oppLevel).name)}）のベットもAIが決めている。`
+      : `第1ラウンドの状況は手入力（ポット ${table.pot} ／ コール ${table.toCall}）。その後は相手もAIが打つ。`);
+    if (sim.forcedContinue) {
+      parts.push('第1ラウンドで<strong>フォールド</strong>と判断したが、'
+        + '交換とその後を見るためコールして進めた。②③ は「降りずに続けた場合」。');
+    }
+    parts.push(`乱数シード ${cond.seed} を変えると、相手の手札と交換の引きが変わる。`);
+    $('scene-summary').innerHTML = parts.join(' ');
 
     $('hand-run-time').textContent = `計算 ${Math.round(performance.now() - t0)} ms`;
     $('hand-results').classList.remove('hidden');
   }
 
-
-  // ============================================================
-  // 仮想の卓
-  // ============================================================
-  //
-  // decideBet / decideExchange は Game のインスタンスを要求する。
-  // ここでは本物の Game を作ってから状態を直接書き換える。
-  // 専用のモックを書くと「ラボでは動くがゲームでは違う」というズレの温床になるので、
-  // 実物を使って必要な場所だけ上書きする。
-
-  function readTableConditions() {
-    const num = (id, fallback) => {
-      const v = Number($(id).value);
-      return isFinite(v) ? v : fallback;
-    };
-    return {
-      myChips: Math.max(1, Math.round(num('table-mychips', 1000))),
-      oppChips: Math.max(1, Math.round(num('table-oppchips', 1000))),
-      pot: Math.max(0, Math.round(num('table-pot', 60))),
-      toCall: Math.max(0, Math.round(num('table-tocall', 0))),
-    };
-  }
-
-  /**
-   * 手札と卓の条件から Game を組み立てる。自分は席0。
-   * @returns {{game:object, seat:number}}
-   */
-  function buildVirtualTable(hand, cond, table) {
-    const seats = cond.opponents + 1;
-    const game = new window.Game({ initialChips: table.myChips });
-    const names = ['あなた'];
-    for (let i = 1; i < seats; i++) names.push(`相手${i}`);
-    game.startGame(seats, names);
-
-    game.players.forEach((p, i) => {
-      p.chips = i === 0 ? table.myChips : table.oppChips;
-      p.currentBet = 0;
-      p.totalBet = 0;
-      p.anteBet = 0;
-      p.isActive = true;
-      p.isEliminated = false;
-      p.isAllIn = false;
-      p.hasActed = false;
-      // 相手の手札は使わないが、空だと他のコードが困るので配られたままにする
-      if (i === 0) p.hand = hand.slice();
-    });
-
-    game.pot = table.pot;
-    game.currentBet = table.toCall;        // 自分の currentBet は 0 なので差額がコール額になる
-    game.minRaise = Math.max(game.config.bigBlind, table.toCall);
-    game.phase = 'BETTING_1';
-    game.currentPlayerIdx = 0;
-    return { game, seat: 0 };
-  }
 
   const BET_LABEL = {
     checkcall: 'チェック / コール',
@@ -989,6 +955,209 @@
    * この2つは対処が正反対（前者は易しい式へ、後者は大きい式へ）なので、
    * 混ぜて「手が弱い」とだけ言っても意味がない。
    */
+  // ============================================================
+  // 仮想の卓 — 1ハンドを最後まで回す
+  // ============================================================
+  //
+  // 「この手札でどう打つか」は1点では決まらない。
+  //   第1ラウンドで賭ける → 交換して手札が変わる → 第2ラウンドで賭け直す
+  // という流れ全体を見ないと、交換の良し悪しも降り引き際も分からない。
+  //
+  // なので本物の Game を1ハンド分まわして、自分の番が来るたびに判断を記録する。
+  // 相手も同じ AI（decideBet / decideExchange）で打つ。
+  // ラボ専用のロジックはここにも書かない。
+
+  function readTableConditions() {
+    const num = (id, fallback) => {
+      const v = Number($(id).value);
+      return isFinite(v) ? v : fallback;
+    };
+    const modeEl = document.querySelector('input[name="table-mode"]:checked');
+    return {
+      mode: modeEl ? modeEl.value : 'manual',
+      myChips: Math.max(1, Math.round(num('table-mychips', 1000))),
+      oppChips: Math.max(1, Math.round(num('table-oppchips', 1000))),
+      pot: Math.max(0, Math.round(num('table-pot', 60))),
+      toCall: Math.max(0, Math.round(num('table-tocall', 0))),
+      oppLevel: $('table-opplevel').value || 'skilled',
+    };
+  }
+
+  const MY_SEAT = 0;
+
+  /**
+   * 手札7枚と卓の条件から1ハンドを回す。
+   *
+   * @returns {{r1:object|null, exchange:object|null, r2:object|null,
+   *            log:string[], forcedContinue:boolean, endedAt:string}}
+   */
+  function simulateHand(hand, cond, table) {
+    const seats = cond.opponents + 1;
+    const game = new window.Game({ initialChips: Math.max(table.myChips, table.oppChips) });
+    const names = ['あなた'];
+    for (let i = 1; i < seats; i++) names.push(`相手${i}`);
+    game.startGame(seats, names);
+
+    // 自分の手札を差し替える。相手は配られたまま（＝ランダムな手札で打ってくる）
+    //
+    // ID を振り直すのが要点。buildDeck() は呼ぶたびに id を n0 から振り直すので、
+    // ラボで配った手札と Game の山札が **同じ id を持つ**。そのままだと
+    // 「引いた札」を id の差分で判定したときに取りこぼす（4枚捨てたのに3枚しか
+    // 引いていないように見えた）。
+    const myHand = hand.map((c, k) => Object.assign({}, c, { id: `me${k}-${c.id}` }));
+    game.players.forEach((p, i) => {
+      p.chips = i === MY_SEAT ? table.myChips : table.oppChips;
+      if (i === MY_SEAT) p.hand = myHand;
+    });
+
+    // 自分が持っている札と同じものを山札から抜く。抜かないと、9を4枚持ったまま
+    // 5枚目の9を引けてしまい、デッキの構成と矛盾する。
+    for (const c of myHand) {
+      const j = game.deck.findIndex((d) => d.type === c.type && d.value === c.value);
+      if (j >= 0) game.deck.splice(j, 1);
+    }
+
+    if (table.mode === 'manual') {
+      // 手入力の状況をそのまま第1ラウンドの開始局面にする
+      game.players.forEach((p) => { p.currentBet = 0; p.hasActed = false; });
+      game.pot = table.pot;
+      game.currentBet = table.toCall;
+      if (table.toCall > 0) {
+        // 誰かが賭けている状態を作る（自分より前の席が出したことにする）
+        const better = game.players[seats - 1];
+        better.currentBet = Math.min(table.toCall, better.chips);
+        better.hasActed = true;
+      }
+      game.minRaise = Math.max(game.config.bigBlind, table.toCall);
+      game.phase = 'BETTING_1';
+      game.betRound = 1;
+      game.currentPlayerIdx = MY_SEAT;
+    }
+
+    const myProfile = COGN.getProfile(cond.level);
+    const oppProfile = COGN.getProfile(table.oppLevel);
+    const model = AILib.OPPONENT_MODEL;
+    const rng = AILib.makeRng(cond.seed >>> 0);
+
+    const out = {
+      r1: null, exchange: null, r2: null,
+      log: [], forcedContinue: false, endedAt: '', game,
+      handBefore: myHand.slice(), handAfter: null,
+    };
+
+    /** 自分の番。判断を記録して、必要なら降りを打ち消して先へ進める */
+    function myTurn(slot) {
+      const ev = AILib.evaluateBetSizes(game, MY_SEAT, myProfile, model, false);
+      const choice = AILib.resolveBetChoice(game, MY_SEAT, ev);
+      const snapshot = {
+        ev, choice,
+        pot: game.pot,
+        toCall: Math.max(0, game.currentBet - game.players[MY_SEAT].currentBet),
+        chips: game.players[MY_SEAT].chips,
+        hand: game.players[MY_SEAT].hand.slice(),
+      };
+      out[slot] = snapshot;
+
+      let played = choice;
+      // 降りるとこの先のシーンが消えてしまう。何を捨てたのかを見るのが目的なので、
+      // 「降りたが、続きを見るためにコールして進めた」ことを明示して先へ進む。
+      if (choice.action === 'fold' && slot === 'r1') {
+        out.forcedContinue = true;
+        played = snapshot.toCall > 0 ? { action: 'call', amount: 0 } : { action: 'check', amount: 0 };
+        out.log.push('あなた: フォールド（続きを見るためコールして進めた）');
+      } else {
+        out.log.push(`あなた: ${ACTION_LABEL[choice.action]}`
+          + (choice.action === 'raise' ? ` ${choice.amount}` : ''));
+      }
+      game.playerAction(MY_SEAT, played.action, played.amount);
+    }
+
+    let guard = 0;
+    let loggedRound = null;
+    while (++guard < 400) {
+      if (game.gameOver) { out.endedAt = 'ゲーム終了'; break; }
+      const phase = game.phase;
+
+      if (phase === 'DEALING') { game.startBettingRound(1); continue; }
+
+      if (phase === 'BETTING_1' || phase === 'BETTING_2') {
+        const slot = phase === 'BETTING_1' ? 'r1' : 'r2';
+        if (loggedRound !== slot) {
+          loggedRound = slot;
+          out.log.push(slot === 'r1' ? '── 第1ラウンド ──' : '── 第2ラウンド（交換後）──');
+        }
+        const seat = game.currentPlayerIdx;
+        const p = game.players[seat];
+        if (!p || !p.isActive || p.isAllIn || p.isEliminated) { game._advanceBetting(); continue; }
+
+        if (seat === MY_SEAT) {
+          if (out[slot]) {
+            // レイズが返ってきて自分の番が2周目に来た。
+            // 表に出す判断は各ラウンドの1回目にしてあるので、ここは進めるだけ。
+            const ev2 = AILib.evaluateBetSizes(game, MY_SEAT, myProfile, model, false);
+            const c2 = AILib.resolveBetChoice(game, MY_SEAT, ev2);
+            // 第1ラウンドで降りると交換以降が消える。目的は交換とその後を見ることなので、
+            // ここだけは降りを打ち消して進め、そのことを明示する。
+            if (c2.action === 'fold' && slot === 'r1') {
+              out.forcedContinue = true;
+              const need = game.currentBet - game.players[MY_SEAT].currentBet;
+              out.log.push('あなた: フォールド（続きを見るためコールして進めた）');
+              game.playerAction(MY_SEAT, need > 0 ? 'call' : 'check', 0);
+            } else {
+              out.log.push(`あなた: ${ACTION_LABEL[c2.action]}`
+                + (c2.action === 'raise' ? ` ${c2.amount}` : ''));
+              game.playerAction(MY_SEAT, c2.action, c2.amount);
+            }
+          } else {
+            myTurn(slot);
+          }
+          continue;
+        }
+
+        const d = AILib.decideBet(game, seat, oppProfile, rng, model);
+        out.log.push(`${p.name}: ${ACTION_LABEL[d.action]}`
+          + (d.action === 'raise' ? ` ${d.amount}` : ''));
+        game.playerAction(seat, d.action, d.amount);
+        continue;
+      }
+
+      if (phase === 'EXCHANGE') {
+        for (let i = 0; i < game.players.length; i++) {
+          const p = game.players[i];
+          if (!p.isActive || p.isEliminated || p.isReady) continue;
+          const prof = i === MY_SEAT ? myProfile : oppProfile;
+          const before = p.hand.slice();
+          // 交換が「どの式を守ろうとしているか」は捨てる前にしか取れない
+          const exStrength = i === MY_SEAT ? AILib.handStrength(game, i, prof, 0, model) : null;
+          const ids = AILib.decideExchange(game, i, prof, rng, model) || [];
+          game.selectExchangeCards(i, ids);
+          game.readyExchange(i);
+          if (i === MY_SEAT) {
+            const kept = new Set(p.hand.map((c) => c.id));
+            out.exchange = {
+              before,
+              discarded: before.filter((c) => ids.includes(c.id)),
+              drawn: p.hand.filter((c) => !before.some((b) => b.id === c.id)),
+              after: p.hand.slice(),
+              keptIds: kept,
+            };
+            out.handAfter = p.hand.slice();
+            out.exchange.strength = exStrength;
+          }
+          if (i === MY_SEAT) {
+            out.log.push(`── 交換: あなたは ${ids.length} 枚 ──`);
+          }
+          if (game.phase !== 'EXCHANGE') break;
+        }
+        continue;
+      }
+
+      out.endedAt = phase;   // CALCULATION まで来たら十分
+      break;
+    }
+
+    return out;
+  }
   function weakness(pick) {
     if (!pick) return { tag: '式が作れない', detail: '', cls: 'rate-low' };
     const { pCorrect, beat, utility } = pick;
@@ -1051,81 +1220,90 @@
     }
   }
 
-  /** 「この卓でどうするか」と「どのカードを入れ替えるか」を描く */
-  function renderTableDecision(hand, cond, profile, model) {
-    const table = readTableConditions();
-    const { game, seat } = buildVirtualTable(hand, cond, table);
+  /**
+   * 1ラウンドぶんのベット判断を描く。
+   * @param {string} n  要素IDの接頭辞（'r1' / 'r2'）
+   * @param {object} snap simulateHand が記録したスナップショット
+   */
+  function renderBetScene(n, snap) {
+    const box = document.getElementById(`scene-${n}`);
+    if (!snap) {
+      box.querySelectorAll('.lab-panel').forEach((el, i) => { if (i > 0) el.classList.add('hidden'); });
+      $(`${n}-bet-action`).textContent = '–';
+      $(`${n}-decide-reason`).textContent = 'このラウンドに自分の番が回ってこなかった（既に決着している）。';
+      $(`${n}-bet-table`).innerHTML = '';
+      $(`${n}-plan-cards`).innerHTML = '<span class="lab-empty-msg">なし</span>';
+      $(`${n}-fold-plan`).classList.add('hidden');
+      return;
+    }
+    box.querySelectorAll('.lab-panel').forEach((el) => el.classList.remove('hidden'));
 
-    const ev = AILib.evaluateBetSizes(game, seat, profile, model, false);
-    const choice = AILib.resolveBetChoice(game, seat, ev);
+    const { ev, choice, pot, toCall, chips, hand } = snap;
 
-    // ---- ベット判断 ----
-    const actEl = $('hand-bet-action');
+    const actEl = $(`${n}-bet-action`);
     actEl.textContent = ACTION_LABEL[choice.action] || choice.action;
     actEl.className = `lab-rate-value ${choice.action === 'fold' ? 'rate-low' : 'rate-high'}`;
 
-    const amount = choice.action === 'allin' ? table.myChips
+    const amount = choice.action === 'allin' ? chips
       : choice.action === 'raise' ? choice.amount
-        : choice.action === 'call' ? table.toCall : 0;
-    $('hand-bet-sub').textContent = choice.action === 'fold'
-      ? `コールに ${table.toCall} 要る。ポット ${table.pot}`
-      : `${amount} チップ（ポット ${table.pot} ／ コール ${table.toCall}）`;
+        : choice.action === 'call' ? toCall : 0;
+    $(`${n}-bet-sub`).textContent = choice.action === 'fold'
+      ? `コールに ${toCall} 要る。ポット ${pot}`
+      : `${amount} チップ（ポット ${pot} ／ コール ${toCall} ／ 手持ち ${chips}）`;
 
-    // ---- 降りるより得か ----
     const margin = ev.best ? ev.best.score - ev.eqFoldNow : -Infinity;
-    const mEl = $('hand-bet-margin');
+    const mEl = $(`${n}-bet-margin`);
     mEl.textContent = ev.best ? (margin >= 0 ? '+' : '') + margin.toFixed(4) : '–';
     mEl.className = `lab-rate-value ${margin > 0 ? 'rate-high' : margin > -0.02 ? 'rate-mid' : 'rate-low'}`;
-    $('hand-bet-margin-sub').textContent = table.toCall > 0
+    $(`${n}-bet-margin-sub`).textContent = toCall > 0
       ? '一番良い賭け方の score − 降りたときの score'
       : 'コール不要なので降りる理由が無い（チェックできる）';
-    $('hand-bet-foldscore').textContent = ev.eqFoldNow.toFixed(4);
+    $(`${n}-bet-foldscore`).textContent = ev.eqFoldNow.toFixed(4);
 
-    // ---- 手が弱い理由 ----
     const planPick = ev.best ? ev.best.pick : null;
     const w = weakness(planPick);
-    const wEl = $('hand-weak-reason');
+    const wEl = $(`${n}-weak-reason`);
     wEl.textContent = w.tag;
     wEl.className = `lab-rate-value ${w.cls}`;
-    $('hand-weak-sub').textContent = w.detail;
+    $(`${n}-weak-sub`).textContent = w.detail;
 
     // ---- なぜその判断になったか ----
     // 「弱いから降りた」と「手は悪くないがオッズが合わない」はまったく別の話なので、
     // 混ぜずに書き分ける。前者は手札の問題、後者は卓の状況の問題。
-    const potOdds = table.toCall > 0 ? table.toCall / (table.pot + table.toCall) : 0;
+    const potOdds = toCall > 0 ? toCall / (pot + toCall) : 0;
     let reason;
     if (!planPick) {
       reason = 'この手札からは式が1つも作れない。';
     } else if (choice.action === 'fold') {
       const u = planPick.utility;
-      if (w.tag === '難しすぎる' || w.tag === '弱すぎる' || w.tag === '両方') {
+      if (w.tag !== '弱くない') {
         reason = `作れる式が${w.tag}ので降りる。${w.detail}。`
-          + `コールに要る ${table.toCall} に対して、勝てる見込みは ${pct(u)}。`;
+          + `コールに要る ${toCall} に対して、勝てる見込みは ${pct(u)}。`;
       } else if (u < potOdds) {
-        reason = `手は悪くないが、コール ${table.toCall} に対してポット ${table.pot} が小さい。`
+        reason = `手は悪くないが、コール ${toCall} に対してポット ${pot} が小さい。`
           + `必要な勝率 ${pct(potOdds)} に対して ${pct(u)} しかないので降りる。`;
       } else {
         reason = `オッズだけなら合う（必要 ${pct(potOdds)} に対し ${pct(u)}）が、`
-          + `負けたときにチップを失う痛手のほうが大きい。`
+          + `負けてチップを失う痛手のほうが大きい。`
           + `ICM で見ると降りる（${ev.eqFoldNow.toFixed(4)}）ほうが上。`;
       }
-    } else if (table.toCall === 0) {
+    } else if (toCall === 0) {
       reason = `コール不要なので降りる理由が無い。`
         + `${BET_LABEL[ev.best.action]} が一番 score が高い`
         + `（賭けるとポットが増えて計算時間が ${formatSeconds(ev.best.calcTime)} まで伸びる）。`;
     } else {
-      reason = `コール ${table.toCall}（必要な勝率 ${pct(potOdds)}）に対して勝てる見込みが ${pct(planPick.utility)}。`
+      reason = `コール ${toCall}（必要な勝率 ${pct(potOdds)}）に対して勝てる見込みが ${pct(planPick.utility)}。`
         + `${BET_LABEL[ev.best.action]} を選ぶ。`;
     }
-    $('hand-decide-reason').textContent = reason;
+    $(`${n}-decide-reason`).textContent = reason;
 
     // ---- 降りても、作る予定だった式は見せる ----
-    const foldBox = $('hand-fold-plan');
+    const foldBox = $(`${n}-fold-plan`);
     if (choice.action === 'fold' && planPick) {
       foldBox.classList.remove('hidden');
-      $('hand-fold-formula').innerHTML =
+      $(`${n}-fold-formula`).innerHTML =
         FE.toMathHTML(planPick.cand.formula) || esc(planPick.cand.formula);
-      $('hand-fold-detail').textContent =
+      $(`${n}-fold-detail`).textContent =
         ` = ${planPick.cand.value.toString()} ／ 所要 ${formatSeconds(planPick.cand.analysis.requiredTime)}`
         + ` ／ 正答率 ${pct(planPick.pCorrect)}`
         + `（${BET_LABEL[ev.best.action]} まで進んだ場合。計算時間 ${formatSeconds(ev.best.calcTime)}）`;
@@ -1136,18 +1314,18 @@
     // ---- 使う予定のカード ----
     if (planPick) {
       const used = cardsForCandidate(hand, planPick.cand);
-      renderCardRow($('hand-plan-cards'), hand, used, 'この式では使わない');
-      $('hand-plan-note').textContent =
+      renderCardRow($(`${n}-plan-cards`), hand, used, 'この式では使わない');
+      $(`${n}-plan-note`).textContent =
         `${planPick.cand.formula} に使う ${used.size} 枚（緑の枠）。`
         + `残り ${hand.length - used.size} 枚は余り`
         + (choice.action === 'fold' ? '。降りるので実際には出さない' : '');
     } else {
-      $('hand-plan-cards').innerHTML = '<span class="lab-empty-msg">式を作れない</span>';
-      $('hand-plan-note').textContent = '';
+      $(`${n}-plan-cards`).innerHTML = '<span class="lab-empty-msg">式を作れない</span>';
+      $(`${n}-plan-note`).textContent = '';
     }
 
     // ---- ベット額ごとの中身 ----
-    $('hand-bet-table').innerHTML = ev.sizes.map((s) => {
+    $(`${n}-bet-table`).innerHTML = ev.sizes.map((s) => {
       const isPicked = ev.best && s.action === ev.best.action && !ev.folds;
       const beatsFold = s.score >= ev.eqFoldNow;
       return `
@@ -1163,17 +1341,29 @@
           <td class="num ${beatsFold ? 'rate-high' : 'rate-low'}">${s.score.toFixed(4)}</td>
         </tr>`;
     }).join('');
+  }
 
-    // ---- どのカードを入れ替えるか ----
-    // decideExchange は乱数を使う（15%で1枚温存する）ので、条件のシードで固定する
-    const exRng = AILib.makeRng(cond.seed >>> 0);
-    const discardIds = new Set(AILib.decideExchange(game, seat, profile, exRng, model) || []);
-    const keepIds = new Set(hand.filter((c) => !discardIds.has(c.id)).map((c) => c.id));
-    renderCardRow($('hand-exchange-cards'), hand, keepIds, '捨てる');
+  /** ② カード交換のシーン */
+  function renderExchangeScene(sim, cond, profile, model) {
+    const ex = sim.exchange;
+    if (!ex) {
+      $('hand-exchange-cards').innerHTML = '<span class="lab-empty-msg">交換フェーズまで進まなかった</span>';
+      $('hand-exchange-note').textContent = '';
+      $('hand-exchange-mismatch').classList.add('hidden');
+      $('hand-after-cards').innerHTML = '';
+      $('hand-after-note').textContent = '';
+      $('hand-after-compare').textContent = '';
+      return;
+    }
+
+    const discardIds = new Set(ex.discarded.map((c) => c.id));
+    const keepIds = new Set(ex.before.filter((c) => !discardIds.has(c.id)).map((c) => c.id));
+    renderCardRow($('hand-exchange-cards'), ex.before, keepIds, '捨てる');
 
     // 交換が守ろうとしている式。ベットの予定と食い違うことがあるので、そのまま出す。
-    const exSt = AILib.handStrength(game, seat, profile, 0, model);
-    const exFormula = exSt.best ? exSt.best.cand.formula : null;
+    const exGame = sim.game;
+    const exSt = ex.strength;
+    const exFormula = exSt && exSt.best ? exSt.best.cand.formula : null;
     let note = discardIds.size === 0
       ? '1枚も替えない（今の手札で十分と判断）'
       : `${discardIds.size} 枚を捨てて引き直す。`
@@ -1183,9 +1373,11 @@
         + `（計算時間 ${formatSeconds(exSt.calcTime)} で見たときの最良候補）。`;
     }
     $('hand-exchange-note').textContent = note;
+    void exGame;
 
     // 交換とベットで前提の計算時間が違うと、別々の式を見ていることになる。
     // ラボは実際の挙動をそのまま見せる場所なので、繕わずに表示する。
+    const planPick = sim.r1 && sim.r1.ev.best ? sim.r1.ev.best.pick : null;
     const mismatch = $('hand-exchange-mismatch');
     if (exFormula && planPick && exFormula !== planPick.cand.formula) {
       mismatch.classList.remove('hidden');
@@ -1193,13 +1385,57 @@
         `<strong>交換とベットで見ている式が違う。</strong>`
         + ` 交換は「今のポットのまま」＝ ${esc(formatSeconds(exSt.calcTime))} で考えるので`
         + ` <span class="lab-mono">${esc(exFormula)}</span> を守るが、`
-        + ` ベットのほうは賭けた後のポット ＝ ${esc(formatSeconds(ev.best.calcTime))} で考えるので`
-        + ` <span class="lab-mono">${esc(planPick.cand.formula)}</span> を狙っている。`
+        + ` 第1ラウンドのベットは賭けた後のポット ＝ ${esc(formatSeconds(sim.r1.ev.best.calcTime))}`
+        + ` で考えるので <span class="lab-mono">${esc(planPick.cand.formula)}</span> を狙っている。`
         + ` 実際のゲームでは交換の後にもう1回ベットラウンドがあるので、`
         + ` <strong>交換の側がポットの伸びを見込んでいない</strong>（現状のモデルの穴）。`;
     } else {
       mismatch.classList.add('hidden');
     }
+
+    // ---- 引き直した結果 ----
+    const drawnIds = new Set(ex.drawn.map((c) => c.id));
+    renderCardRow($('hand-after-cards'), ex.after, drawnIds, '元から持っていた札');
+    $('hand-after-note').textContent = ex.drawn.length === 0
+      ? '引き直しなし'
+      : `緑の枠が引いた ${ex.drawn.length} 枚。`
+        + `捨てたのは ${ex.discarded.map((c) => c.display != null ? c.display : c.value).join(' ')}。`
+        + '乱数シードを変えると引きが変わる。';
+
+    // 交換で手札が良くなったのか悪くなったのかを、同じ計算時間で比べる
+    const t = sim.r1 ? sim.r1.ev.best.calcTime : cond.seconds;
+    const beforeBest = AILib.chooseCandidate(
+      AILib.candidateSet(ex.before, profile), t, profile, cond.opponents, model);
+    const afterBest = AILib.chooseCandidate(
+      AILib.candidateSet(ex.after, profile), t, profile, cond.opponents, model);
+    if (beforeBest && afterBest) {
+      const d = afterBest.utility - beforeBest.utility;
+      const verdict = d > 0.02 ? '良くなった' : d < -0.02 ? '悪くなった' : 'ほぼ変わらない';
+      $('hand-after-compare').textContent =
+        `同じ計算時間（${formatSeconds(t)}）で比べると ${verdict}。`
+        + ` 交換前 ${beforeBest.cand.formula}（効用 ${beforeBest.utility.toFixed(3)}）`
+        + ` → 交換後 ${afterBest.cand.formula}（効用 ${afterBest.utility.toFixed(3)}）`
+        + `／ 差 ${d >= 0 ? '+' : ''}${d.toFixed(3)}。`
+        + ' 引きは運なので、シードを変えると結果が変わる。';
+    } else {
+      $('hand-after-compare').textContent = '';
+    }
+  }
+
+  /** 手入力とおまかせで、見せる入力欄と説明文を切り替える */
+  function applyTableMode() {
+    const mode = readTableConditions().mode;
+    document.querySelectorAll('[data-manual-only]').forEach((el) => {
+      el.hidden = mode !== 'manual';
+    });
+    document.querySelectorAll('[data-auto-only]').forEach((el) => {
+      el.hidden = mode !== 'auto';
+    });
+    $('table-mode-note').textContent = mode === 'auto'
+      ? 'アンティとブラインドから始めて、相手のベットも交換もAIが決める。'
+        + '状況を考えるのが面倒なとき用。相手の手札は山札からランダムに配られる。'
+      : '第1ラウンドの開始局面（ポットとコール額）を自分で決める。'
+        + 'そこから先は相手もAIが打つので、②③ のシーンはその結果になる。';
   }
 
   // ============================================================
@@ -1291,11 +1527,31 @@
     $('btn-hand-clear').addEventListener('click', () => { state.hand = []; renderHand(); });
     $('btn-hand-run').addEventListener('click', runHand);
     linkNumberAndRange('hand-seconds', 'hand-seconds-range', () => {});
+    fillLevelSelect($('table-opplevel'));
+
     // 卓の条件を変えたら、結果が出ているときだけ引き直す
-    ['table-mychips', 'table-oppchips', 'table-pot', 'table-tocall',
+    const rerun = () => {
+      if (!$('hand-results').classList.contains('hidden')) runHand();
+    };
+    ['table-mychips', 'table-oppchips', 'table-pot', 'table-tocall', 'table-opplevel',
       'hand-level', 'hand-opponents', 'hand-seed'].forEach((id) => {
-      $(id).addEventListener('change', () => {
-        if (!$('hand-results').classList.contains('hidden')) runHand();
+      $(id).addEventListener('change', rerun);
+    });
+
+    // 手入力 ↔ おまかせ
+    document.querySelectorAll('input[name="table-mode"]').forEach((r) => {
+      r.addEventListener('change', () => { applyTableMode(); rerun(); });
+    });
+    applyTableMode();
+
+    // ---- 手札タブの中のサブタブ ----
+    document.querySelectorAll('.lab-subtab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.lab-subtab').forEach((t) => t.classList.remove('active'));
+        tab.classList.add('active');
+        document.querySelectorAll('.lab-scene').forEach((sc) => {
+          sc.classList.toggle('hidden', sc.id !== `scene-${tab.dataset.scene}`);
+        });
       });
     });
 
