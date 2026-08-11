@@ -86,7 +86,11 @@ BEST_FILE = os.path.join(_MODELS, f'{MODEL_NAME}_best.pt')
 POLICY_JSON = os.path.join(_BASE, '..', 'models', f'policy_{LEVEL}.json')
 DECISIONS_PER_GEN = int(ENV('HNP_DECISIONS', '8192'))
 EVAL_EVERY = int(ENV('HNP_EVAL_EVERY', '5'))
-EVAL_HANDS = int(ENV('HNP_EVAL_HANDS', '600'))
+# 評価は「何ハンド回したか」ではなく **何トーナメント決着したか** で打ち切る。
+# ハンド数で切ると、AIが強くなって1トーナメントが長くなったときに
+# 決着ゼロ → 優勝率が測れない、という壊れ方をする（evaluate の説明を参照）。
+EVAL_TOURNEYS = int(ENV('HNP_EVAL_TOURNEYS', '60'))
+EVAL_HAND_CAP = int(ENV('HNP_EVAL_HAND_CAP', '6000'))   # 暴走よけの上限
 
 LR = 3e-4
 PPO_EPOCHS = 4
@@ -379,7 +383,7 @@ def collect(net, env, target_decisions, gen, progress):
 # ══════════════════════════════════════════════════
 
 @torch.no_grad()
-def evaluate(net, opponent, hands, tag):
+def evaluate(net, opponent, tag, min_tourneys=EVAL_TOURNEYS, hand_cap=EVAL_HAND_CAP):
     """席0を net、他席を opponent（None ならランダム）にして強さを測る。
 
     自己対戦だけだと「自分だけ強くなったつもり」に陥る。
@@ -388,15 +392,45 @@ def evaluate(net, opponent, hands, tag):
     主指標は **優勝率**。トーナメントなので、そこが勝ち負けそのもの。
     n人卓で互角なら 1/n に落ち着くので、それを上回れば強い。
 
-    bb/hand も出すが従属指標。長く残った席ほどハンド数が増えるので、
-    席ごとの bb/hand には生存バイアスがかかる（強いほど不利に見えることがある）。
+    ══════════════════════════════════════════════════
+    「ハンド数で打ち切る」をやめた理由
+    ══════════════════════════════════════════════════
+    以前は EVAL_HANDS（600ハンド）回して終わりにしていた。これが壊れた。
+
+    AIが強くなると **1トーナメントが長くなる**（実測で 4.6 → 24 ハンド）。
+    32卓を並列に回して合計600ハンドだと1卓あたり19ハンドで、
+    **1つも決着しない**。決着ゼロなら優勝率は計算できないのに、
+    env_server が 0 を返していたので「優勝率0%」に見えた。
+
+    しかも `champ > 1/人数` が過去最強の更新条件なので、
+    **更新が止まり、方策の書き出しも止まった**。40世代回したのに
+    models/policy_*.json は15世代目のまま、というのが実際に起きた。
+
+    なので **決着した数で打ち切る**。ハンド数の上限は暴走よけにだけ置く。
+    決着が足りなければ優勝率は None を返し、呼び出し側が「測れなかった」と
+    分かるようにする（0 を返してはいけない。負けたのと区別がつかない）。
     """
     env = NodeEnv(envs=32, players=PLAYERS, level=LEVEL, seed=SEED + 9999)
     rng = np.random.default_rng(SEED + 4242)
     try:
         requests, _ = env.requests, env.results
         played = 0
-        while played < hands:
+        # env.stats() は取ると同時にリセットするので、こちらで足し込む
+        acc = {'tourneys': 0, 'champions': 0, 'place_sum': 0,
+               'bb_sum': 0.0, 'hands': 0, 'wins': 0.0}
+
+        def absorb():
+            st = env.stats()
+            s0 = st.get('seats', {}).get('0', {})
+            n = s0.get('hands', 0) or 0
+            acc['tourneys'] += s0.get('tournaments', 0) or 0
+            acc['champions'] += s0.get('champions', 0) or 0
+            acc['place_sum'] += s0.get('place_sum', 0) or 0
+            acc['hands'] += n
+            acc['bb_sum'] += (s0.get('bb_per_hand', 0.0) or 0.0) * n
+            acc['wins'] += (s0.get('win_rate', 0.0) or 0.0) * n
+
+        while acc['tourneys'] < min_tourneys and played < hand_cap:
             actions = [0] * len(requests)
             mine = [i for i, r in enumerate(requests) if r['seat'] == 0]
             theirs = [i for i, r in enumerate(requests) if r['seat'] != 0]
@@ -418,13 +452,20 @@ def evaluate(net, opponent, hands, tag):
 
             requests, results = env.act(actions)
             played += sum(1 for x in results if x['seat'] == 0)
-        st = env.stats()
-        seat0 = st.get('seats', {}).get('0', {})
+            if played % 512 < 32:      # ときどき吸い上げて決着数を見る
+                absorb()
+
+        absorb()
+
+        nt = acc['tourneys']
+        nh = max(1, acc['hands'])
         return {
-            f'champ_vs_{tag}': seat0.get('champion_rate', 0.0),
-            f'place_vs_{tag}': seat0.get('avg_place', 0.0),
-            f'bb_vs_{tag}': seat0.get('bb_per_hand', 0.0),
-            f'win_vs_{tag}': seat0.get('win_rate', 0.0),
+            # 決着ゼロなら None。0 を返すと「全部負けた」と見分けがつかない
+            f'champ_vs_{tag}': (acc['champions'] / nt) if nt else None,
+            f'place_vs_{tag}': (acc['place_sum'] / nt + 1) if nt else None,
+            f'tourneys_vs_{tag}': nt,          # 何件で測った数字なのかを必ず残す
+            f'bb_vs_{tag}': acc['bb_sum'] / nh,
+            f'win_vs_{tag}': acc['wins'] / nh,
         }
     finally:
         env.close()
@@ -645,17 +686,23 @@ def run():
             }
 
             if gen % EVAL_EVERY == 0:
-                metrics.update(evaluate(net, None, EVAL_HANDS, 'random'))
-                metrics.update(evaluate(net, best, EVAL_HANDS, 'best'))
+                metrics.update(evaluate(net, None, 'random'))
+                metrics.update(evaluate(net, best, 'best'))
                 metrics['bb_per_hand'] = metrics.get('bb_vs_best', 0.0)
 
                 # 主指標は「過去最強を相手にした優勝率」。
                 # n人卓で互角なら 1/n なので、そこを超えたら本当に上回った。
-                champ = metrics.get('champ_vs_best', 0.0)
+                champ = metrics.get('champ_vs_best')
+                nt = metrics.get('tourneys_vs_best', 0)
                 metrics['champion_rate'] = champ
                 even = 1.0 / max(2, PLAYERS)
 
-                if champ > even:
+                # 測れていないときは更新しない。ここを「0点として扱う」に
+                # してしまうと、評価が壊れているのに静かに更新が止まる。
+                if champ is None or nt < max(10, EVAL_TOURNEYS // 4):
+                    print(f'⚠ 優勝率を測れていない（決着 {nt} 件）。'
+                          f'過去最強は更新しない。HNP_EVAL_HAND_CAP を上げること。', flush=True)
+                elif champ > even:
                     best_score = champ
                     best.load_state_dict(net.state_dict())
                     torch.save({'state': net.state_dict(), 'obs_dim': env.obs_dim,

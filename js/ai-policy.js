@@ -46,10 +46,29 @@ const ACTION_SIZES = {
 
 /** 状況を表す特徴量の個数 */
 const CONTEXT_FEATURES = 16;
+/**
+ * 相手についての特徴量の個数。
+ *
+ * ============================================================
+ * なぜ足したか
+ * ============================================================
+ * ここが無いあいだ、AIは **相手を一切見ていなかった**。
+ * 観測に入っていたのは `toCall/pot` や `currentBet/bb` という合算値だけで、
+ * 「誰がオールインしたか」「何人がレイズを返したか」は入力されていない。
+ * そのため PPO を何世代回しても **相手の読みは学習しようがなかった**。
+ *
+ * 席ごとの値をそのまま並べると人数（2〜6）で長さが変わるので、
+ * **割合に畳んで固定長**にしてある。誰がやったかは落ちるが、
+ * 「何人が / どれくらいの大きさで」は残る。
+ *
+ * スタック関係も入れる。トーナメントでは
+ * 「自分より短い相手が居るか」で降り引き際が変わる（ICMの効き方が変わる）ため。
+ */
+const OPPONENT_FEATURES = 12;
 /** 候補1本あたりの特徴量の個数 */
 const CAND_FEATURES = 9;
 /** 観測ベクトルの長さ */
-const OBS_DIM = CONTEXT_FEATURES + FORMULA_SLOTS * CAND_FEATURES + 3;
+const OBS_DIM = CONTEXT_FEATURES + OPPONENT_FEATURES + FORMULA_SLOTS * CAND_FEATURES + 3;
 
 function clip(x, lo, hi) {
   if (!isFinite(x)) return hi;
@@ -103,6 +122,45 @@ function buildObservation(game, idx, profile) {
     clip(calcTimeBig / 600, 0, 1),
     clip(game.level / 10, 0, 1),
   ];
+
+  // ---- 相手の行動とスタック ----
+  const others = game.players.filter((p, i) => i !== idx && !p.isEliminated);
+  const inHand = others.filter(p => p.isActive);
+  const n = Math.max(1, others.length);
+
+  const count = (fn) => others.filter(fn).length / n;
+  const last = game.lastAggressorIdx >= 0 ? game.players[game.lastAggressorIdx] : null;
+  const lastIsMe = game.lastAggressorIdx === idx;
+
+  const oppChips = inHand.map(p => p.chips);
+  const maxOpp = oppChips.length ? Math.max(...oppChips) : 0;
+  const minOpp = oppChips.length ? Math.min(...oppChips) : 0;
+  const totalChips = game.livePlayers().reduce((a, p) => a + p.chips, 0) + game.pot;
+
+  // HNP_ABLATE_OPPONENT=1 で相手特徴を全部 0 にする（対照実験用）。
+  // 「足した特徴が本当に効いたのか」は、潰した対照と比べないと言えない。
+  // 次元は変えないので、潰した方策と潰していない方策を同じ卓で戦わせられる。
+  // ブラウザには process が無いので、実プレイでは決して有効にならない。
+  const ABLATE = (typeof process !== 'undefined' && process.env
+    && process.env.HNP_ABLATE_OPPONENT === '1');
+  const z = (v) => (ABLATE ? 0 : v);
+  obs.push(
+    z(count(p => p.lastAction === 'raise')),
+    z(count(p => p.lastAction === 'allin' || p.isAllIn)),
+    z(count(p => p.lastAction === 'fold' || !p.isActive)),
+    z((last && !lastIsMe && last.lastAction === 'raise') ? 1 : 0),
+    z((last && !lastIsMe && last.lastAction === 'allin') ? 1 : 0),
+    // 直前の仕掛けの大きさ。ポット比なのでブラインドの上がり方に依存しない
+    z(last && !lastIsMe ? clip(last.lastActionRatio, 0, 3) / 3 : 0),
+    z(clip(maxOpp / (me.chips + 1), 0, 3) / 3),
+    z(clip(minOpp / (me.chips + 1), 0, 3) / 3),
+    // 自分より短い相手の割合。トーナメントでは「先に飛ぶ人が居る」ことに価値がある
+    z(count(p => p.chips < me.chips)),
+    // ポジション: 自分の後ろにまだ行動していない相手が何割いるか
+    z(count(p => p.isActive && !p.hasActed && !p.isAllIn)),
+    z(clip(me.chips / (totalChips + 1), 0, 1)),
+    z(inHand.length / n)
+  );
 
   // ---- 候補ごとの特徴量 ----
   for (let i = 0; i < FORMULA_SLOTS; i++) {
@@ -348,7 +406,7 @@ async function loadPolicy(level = 'casual') {
 
 const AIPolicy = {
   BET_ACTION_IDS, FORMULA_SLOTS, EXCHANGE_SLOTS, ACTION_SIZES,
-  OBS_DIM, CONTEXT_FEATURES, CAND_FEATURES,
+  OBS_DIM, CONTEXT_FEATURES, OPPONENT_FEATURES, CAND_FEATURES,
   buildObservation, buildMasks, resolveBetAction, resolveExchangeAction,
   NeuralPolicy, loadPolicy, maskedArgmax,
 };

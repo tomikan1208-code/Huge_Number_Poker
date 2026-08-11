@@ -502,9 +502,15 @@ class EnvPool {
         hands: s.seatN[k],
         // 勝ち残り（学習が本当に狙っているもの）
         icm_per_hand: s.seatReward[k] / s.seatN[k],
-        champion_rate: nt ? (s.seatChamp[k] || 0) / nt : 0,
-        avg_place: nt ? (s.seatPlaceSum[k] || 0) / nt + 1 : 0,   // 1位を1とする
+        // 決着したトーナメントが1つも無いときは **null**。0 にしてはいけない。
+        // 0 は「全部負けた」と区別がつかず、実際そのせいで評価が壊れているのに
+        // 「優勝率0%」に見えて気づけなかった（train.py の evaluate を参照）。
+        champion_rate: nt ? (s.seatChamp[k] || 0) / nt : null,
+        avg_place: nt ? (s.seatPlaceSum[k] || 0) / nt + 1 : null,   // 1位を1とする
         tournaments: nt,
+        // 生の件数。評価側が複数回に分けて集計するときに足せるようにする
+        champions: s.seatChamp[k] || 0,
+        place_sum: s.seatPlaceSum[k] || 0,
       };
     }
     const out = {

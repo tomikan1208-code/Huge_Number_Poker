@@ -113,6 +113,8 @@ class Game {
     this.log = [];
     this.calculationTimeLimit = 0;
     this.gameOver = false;
+    /** このラウンドで最後にレイズ／オールインした席。誰も居なければ -1 */
+    this.lastAggressorIdx = -1;
   }
 
   // ============================================================
@@ -147,6 +149,10 @@ class Game {
         hasActed: false,
         isAllIn: false,
         isReady: false,
+        // このベットラウンドで最後に取った行動。AIの観測（相手の読み）に使う。
+        // ラウンドの頭で null に戻す。
+        lastAction: null,
+        lastActionRatio: 0,   // そのとき出した額 ÷ 直前のポット
       });
     }
     this.dealerIdx = 0;
@@ -320,7 +326,10 @@ class Game {
     this.players.forEach(p => {
       p.isReady = false;
       p.hasActed = false;
+      p.lastAction = null;
+      p.lastActionRatio = 0;
     });
+    this.lastAggressorIdx = -1;
 
     if (round === 1) {
       // ブラインドは既に場に出ている。currentBet をリセットしてはいけない。
@@ -366,6 +375,8 @@ class Game {
     }
 
     const toCall = this.currentBet - player.currentBet;
+    const potBefore = this.pot;
+    const betBefore = player.currentBet;
 
     switch (action) {
       case 'fold':
@@ -424,6 +435,14 @@ class Game {
     }
 
     player.hasActed = true;
+
+    // 相手の読みに使う行動履歴。ここで残さないと「誰が何をしたか」が
+    // ログの文字列にしか残らず、観測に載せられない。
+    player.lastAction = action;
+    player.lastActionRatio = potBefore > 0
+      ? Math.min(5, (player.currentBet - betBefore) / potBefore) : 0;
+    if (action === 'raise' || action === 'allin') this.lastAggressorIdx = playerIdx;
+
     this._advanceBetting();
     return { ok: true };
   }
