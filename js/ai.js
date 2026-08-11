@@ -640,12 +640,61 @@ function callProbability(raiseOver, pot, toCall, config) {
   return Math.max(BET_MODEL.CALL_MIN, Math.min(BET_MODEL.CALL_MAX, p));
 }
 
-/** 現在のハンドの強さ（自分の最良候補の効用）を、期待ポットのもとで測る */
+/**
+ * 「結局この式を何秒で解くことになるのか」の見積もり。
+ *
+ * ============================================================
+ * なぜ「今のポット」ではいけないか
+ * ============================================================
+ * 計算時間はポットのチップ数で決まる（設計指示7）。だがポットは
+ * **計算フェーズに入るまで増え続ける**。今のポットで見積もると時間を短く見て、
+ * 易しくて小さい式のほうを高く評価してしまう。
+ *
+ * 実際これで、交換とベットが **別々の式を見ている** 状態になっていた。
+ *
+ *     交換  : expectedCalcTime(game, 0) = 今のポット   → 1分0秒  で (8^9)+6 を守る
+ *     ベット: 賭けた後のポット                          → 10分0秒 で (9+6)^8 を狙う
+ *
+ * 交換は「(8^9)+6 に要る札」を残すのに、ベットは「(9+6)^8 を作る前提」で
+ * 額を決める。守る札と狙う式が食い違う。AIテスト場の手札タブで見つかった。
+ *
+ * ============================================================
+ * 直し方: 新しい定数を置かず、AI自身のベット計画から取る
+ * ============================================================
+ * 「計算フェーズのポットはいくらか」を当てにいくと、また根拠のない判断値が増える。
+ * そうではなく **AIが今まさに選ぼうとしているベット額** から逆算する。
+ * evaluateBetSizes() は額ごとに「その額を出したときのポットと計算時間」を
+ * 既に出しているので、その最良手の calcTime をそのまま使う。
+ *
+ * これでベットと交換が **定義上同じ数字**を見ることになり、食い違いようがなくなる。
+ * 増える定数はゼロ。
+ *
+ * 残る過小評価: どちらも「このベットラウンドが終わった時点のポット」までしか見ない。
+ * 交換の後にもう1ラウンドあるぶんは、まだ数えていない。
+ * そこを埋めるには「次のラウンドでいくら入るか」の仮定が要り、
+ * それは根拠の無い定数になるので入れていない。
+ */
+function plannedCalcTime(game, playerIdx, profile, model = OPPONENT_MODEL) {
+  // 計算フェーズに入っていれば制限時間は確定している
+  if (game.calculationTimeLimit > 0
+      && (game.phase === 'CALCULATION' || game.phase === 'SHOWDOWN')) {
+    return game.calculationTimeLimit;
+  }
+  const ev = evaluateBetSizes(game, playerIdx, profile, model, false);
+  return ev.best ? ev.best.calcTime : expectedCalcTime(game, 0);
+}
+
+/**
+ * 現在のハンドの強さ（自分の最良候補の効用）。
+ * @param {number|null} myExtra 自分が追加で出す額。null なら plannedCalcTime を使う
+ */
 function handStrength(game, playerIdx, profile, myExtra = 0, model = OPPONENT_MODEL) {
   const player = game.players[playerIdx];
   const cands = candidateSet(player.hand, profile);
-  if (cands.length === 0) return { equity: 0, best: null, cands };
-  const t = expectedCalcTime(game, myExtra);
+  if (cands.length === 0) return { equity: 0, best: null, cands, calcTime: 0 };
+  const t = myExtra === null
+    ? plannedCalcTime(game, playerIdx, profile, model)
+    : expectedCalcTime(game, myExtra);
   const opponents = Math.max(1, game.activePlayers().length - 1);
   const best = chooseCandidate(cands, t, profile, opponents, model);
   return { equity: best ? best.utility : 0, best, cands, calcTime: t };
@@ -807,7 +856,9 @@ function decideBet(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
  */
 function decideExchange(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
   const player = game.players[playerIdx];
-  const st = handStrength(game, playerIdx, profile, 0, model);
+  // ベットと同じ計算時間で見る。ここを expectedCalcTime(game, 0) にすると
+  // 「守る札」と「狙う式」が食い違う（plannedCalcTime の説明を参照）。
+  const st = handStrength(game, playerIdx, profile, null, model);
   if (!st.best) return player.hand.slice(0, 3).map(c => c.id);
 
   const used = new Set();
@@ -952,7 +1003,7 @@ const AI = {
   enumerateFormulas, candidateSet, candidateUtility, chooseCandidate,
   correctDeclaration, wrongDeclaration, produceSubmission,
   decideBet, decideExchange, handStrength, evaluateBetSizes, resolveBetChoice,
-  calcTimeForPot, expectedCalcTime, beatsOneOpponent, callProbability,
+  calcTimeForPot, expectedCalcTime, plannedCalcTime, beatsOneOpponent, callProbability,
   placePayouts, icmEquity, icmAfterDelta,
   OPPONENT_MODEL, BET_MODEL, BET_ACTIONS, cardsUsed, cardStaticValue,
 };
