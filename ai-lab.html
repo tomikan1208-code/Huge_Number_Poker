@@ -265,11 +265,6 @@
             <select id="hand-level"></select>
           </div>
           <div class="lab-field">
-            <label for="hand-seconds">計算時間（秒）</label>
-            <input id="hand-seconds" type="number" min="1" max="3600" step="1" value="60">
-            <input id="hand-seconds-range" type="range" min="10" max="600" step="5" value="60">
-          </div>
-          <div class="lab-field">
             <label for="hand-trials">試行回数（実測）</label>
             <input id="hand-trials" type="number" min="1" max="20000" step="50" value="200">
           </div>
@@ -383,7 +378,6 @@
           </p>
           <p class="lab-inline-note" style="margin-top:0;">
             額ごとに計算時間が変わるので、<strong>選ぶ式も変わる</strong>。
-            上の「AIが選ぶ式」は「条件」の計算時間で見たものなので、ここと一致しないことがある。
           </p>
           <div class="lab-table-wrap">
             <table class="lab-table">
@@ -480,7 +474,6 @@
           </p>
           <p class="lab-inline-note" style="margin-top:0;">
             額ごとに計算時間が変わるので、<strong>選ぶ式も変わる</strong>。
-            上の「AIが選ぶ式」は「条件」の計算時間で見たものなので、ここと一致しないことがある。
           </p>
           <div class="lab-table-wrap">
             <table class="lab-table">
@@ -511,6 +504,26 @@
 
         <!-- ---------- ④ 候補と比較 ---------- -->
         <div id="scene-cand" class="lab-scene hidden">
+
+          <div class="lab-panel">
+            <h2>どの時点で見るか</h2>
+            <div class="lab-run-row" style="margin-top:0;">
+              <label class="lab-checkbox">
+                <input type="radio" name="cand-when" value="after" checked>
+                交換後の手札（実際に提出する手札）
+              </label>
+              <label class="lab-checkbox">
+                <input type="radio" name="cand-when" value="before">
+                交換前の手札
+              </label>
+            </div>
+            <p id="cand-context" class="lab-reason"></p>
+            <p class="lab-inline-note">
+              <strong>計算時間はポットから決まる</strong>ので、ここで秒数を指定はできない。
+              ①③ と同じ数字を使う（本編と同じ仕組み。設計指示7）。
+              好きな秒数で試したいときは「式テスト」タブへ。
+            </p>
+          </div>
         <div class="lab-panel">
           <h2>AIが選ぶ式</h2>
           <div class="lab-rate-row">
