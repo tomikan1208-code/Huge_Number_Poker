@@ -719,6 +719,12 @@ html { background: var(--bg-primary); }
   background: rgba(255, 176, 32, 0.08);
 }
 
+/* 「起きてはいけないこと」が起きたとき用。通常運転の注記と区別する */
+.lab-reason-bad {
+  border-left-color: var(--danger);
+  background: rgba(255, 71, 87, 0.10);
+}
+
 .lab-mono { font-family: var(--font-mono); }
 
 /* ---------- 小物 ---------- */

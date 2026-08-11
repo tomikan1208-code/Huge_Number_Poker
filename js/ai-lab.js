@@ -1128,7 +1128,10 @@
           const prof = i === MY_SEAT ? myProfile : oppProfile;
           const before = p.hand.slice();
           // 交換が「どの式を守ろうとしているか」は捨てる前にしか取れない
-          const exStrength = i === MY_SEAT ? AILib.handStrength(game, i, prof, 0, model) : null;
+          // 交換の瞬間に「守る式」と「ベットするなら狙う式」を両方取る。
+          // plannedCalcTime で揃えたので一致するはずで、ずれたらモデルが壊れたサイン。
+          const exStrength = i === MY_SEAT ? AILib.handStrength(game, i, prof, null, model) : null;
+          const exBet = i === MY_SEAT ? AILib.evaluateBetSizes(game, i, prof, model, false) : null;
           const ids = AILib.decideExchange(game, i, prof, rng, model) || [];
           game.selectExchangeCards(i, ids);
           game.readyExchange(i);
@@ -1143,6 +1146,7 @@
             };
             out.handAfter = p.hand.slice();
             out.exchange.strength = exStrength;
+            out.exchange.betPlan = exBet && exBet.best ? exBet.best : null;
           }
           if (i === MY_SEAT) {
             out.log.push(`── 交換: あなたは ${ids.length} 枚 ──`);
@@ -1361,7 +1365,6 @@
     renderCardRow($('hand-exchange-cards'), ex.before, keepIds, '捨てる');
 
     // 交換が守ろうとしている式。ベットの予定と食い違うことがあるので、そのまま出す。
-    const exGame = sim.game;
     const exSt = ex.strength;
     const exFormula = exSt && exSt.best ? exSt.best.cand.formula : null;
     let note = discardIds.size === 0
@@ -1373,22 +1376,34 @@
         + `（計算時間 ${formatSeconds(exSt.calcTime)} で見たときの最良候補）。`;
     }
     $('hand-exchange-note').textContent = note;
-    void exGame;
 
-    // 交換とベットで前提の計算時間が違うと、別々の式を見ていることになる。
-    // ラボは実際の挙動をそのまま見せる場所なので、繕わずに表示する。
-    const planPick = sim.r1 && sim.r1.ev.best ? sim.r1.ev.best.pick : null;
+    // 交換の瞬間に「守る式」と「ベットするなら狙う式」が一致しているかを見る。
+    // plannedCalcTime で見積もりを揃えたので、ここは常に一致するはず。
+    // ずれたらモデルが壊れたサインなので、検知器として残してある。
+    const r1Pick = sim.r1 && sim.r1.ev.best ? sim.r1.ev.best.pick : null;
+    const exPlan = ex.betPlan ? ex.betPlan.pick.cand.formula : null;
     const mismatch = $('hand-exchange-mismatch');
-    if (exFormula && planPick && exFormula !== planPick.cand.formula) {
+
+    if (exFormula && exPlan && exFormula !== exPlan) {
       mismatch.classList.remove('hidden');
+      mismatch.classList.add('lab-reason-bad');
       mismatch.innerHTML =
-        `<strong>交換とベットで見ている式が違う。</strong>`
-        + ` 交換は「今のポットのまま」＝ ${esc(formatSeconds(exSt.calcTime))} で考えるので`
-        + ` <span class="lab-mono">${esc(exFormula)}</span> を守るが、`
-        + ` 第1ラウンドのベットは賭けた後のポット ＝ ${esc(formatSeconds(sim.r1.ev.best.calcTime))}`
-        + ` で考えるので <span class="lab-mono">${esc(planPick.cand.formula)}</span> を狙っている。`
-        + ` 実際のゲームでは交換の後にもう1回ベットラウンドがあるので、`
-        + ` <strong>交換の側がポットの伸びを見込んでいない</strong>（現状のモデルの穴）。`;
+        `<strong>交換とベットが同じ瞬間に違う式を見ている。</strong>`
+        + ` 交換は <span class="lab-mono">${esc(exFormula)}</span>、`
+        + ` ベットは <span class="lab-mono">${esc(exPlan)}</span>。`
+        + ` この2つは <code>plannedCalcTime()</code> で揃えてあるので、`
+        + ` ここが出るのは<strong>モデルが壊れているサイン</strong>。`;
+    } else if (exFormula && r1Pick && exFormula !== r1Pick.cand.formula) {
+      // これは正常。第1ラウンドの読みと、交換時点の読みが違うだけ。
+      mismatch.classList.remove('hidden');
+      mismatch.classList.remove('lab-reason-bad');
+      mismatch.innerHTML =
+        `第1ラウンドでは <span class="lab-mono">${esc(r1Pick.cand.formula)}</span>`
+        + `（計算時間 ${esc(formatSeconds(sim.r1.ev.best.calcTime))}）を狙っていたが、`
+        + ` 交換の時点では <span class="lab-mono">${esc(exFormula)}</span>`
+        + `（${esc(formatSeconds(exSt.calcTime))}）に変わっている。`
+        + ` 間に相手が賭けてポットが動いたぶん、狙う式も動く。<strong>これは正常</strong> ——`
+        + ` 交換とベットは同じ瞬間には同じ式を見ている。`;
     } else {
       mismatch.classList.add('hidden');
     }
