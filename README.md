@@ -229,6 +229,7 @@ js/
 tools/
   start.js                    start.bat の中身（ポート掃除・依存確認・起動・URL案内）
   calibrate-ai.js             正答率モデルの要件検査と現在値の記録
+  measure-card-values.js      「その札を残す価値」を実測して表にする
 train/
   env_server.js               並列環境サーバー（Node）
   train.py                    PPO 学習器（Python）

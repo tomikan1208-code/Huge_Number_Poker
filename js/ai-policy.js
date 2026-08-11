@@ -282,9 +282,10 @@ function resolveExchangeAction(game, idx, k, profile) {
       if (need[key] > 0) { need[key]--; used.add(c.id); }
     }
   }
-  const rank = (c) => (used.has(c.id) ? 100 : 0) + _polAI.cardStaticValue(c);
-  const ordered = me.hand.slice().sort((a, b) => rank(a) - rank(b));
-  return ordered.slice(0, Math.min(k, ordered.length)).map(c => c.id);
+  // 捨てる順はヒューリスティックと同じ関数を使う（実測の表 + 使用札の下駄）。
+  // ここだけ別の順序にしていたせいで、学習済みかどうかで交換の質が変わっていた。
+  const t = _polAI.plannedCalcTime(game, idx, profile);
+  return _polAI.pickDiscards(me.hand, used, t, k);
 }
 
 // ============================================================
