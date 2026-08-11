@@ -865,35 +865,143 @@ function decideExchange(game, playerIdx, profile, rng, model = OPPONENT_MODEL) {
   const need = {};
   for (const v of st.best.cand.numbers) need[`n${v}`] = (need[`n${v}`] || 0) + 1;
   for (const v of st.best.cand.ops) need[`o${v}`] = (need[`o${v}`] || 0) + 1;
-
   for (const c of player.hand) {
     const key = (c.type === 'number' ? 'n' : 'o') + c.value;
     if (need[key] > 0) { need[key]--; used.add(c.id); }
   }
 
-  const spare = player.hand.filter(c => !used.has(c.id));
-
-  // 手が十分強ければ余りだけ替える。弱ければ踏み込んで替える。
+  // 何枚替えるか。手が十分強ければ余りの枚数だけ、弱ければ踏み込む。
+  // *どの* 札を捨てるかは discardOrder（実測の表）が決める。
+  const spare = player.hand.length - used.size;
   const satisfied = st.equity > 0.5 + profile.riskAppetite * 0.2;
-  let discard = spare;
-  if (!satisfied) {
-    const ranked = player.hand
-      .filter(c => used.has(c.id))
-      .sort((a, b) => cardStaticValue(a) - cardStaticValue(b));
-    discard = spare.concat(ranked.slice(0, Math.max(0, 4 - spare.length)));
-  }
+  let k = satisfied ? spare : Math.max(spare, 4);
+
   // たまには温存する（読まれないため）
-  if (rng() < 0.15 && discard.length > 1) discard = discard.slice(0, discard.length - 1);
-  return discard.slice(0, 5).map(c => c.id);
+  if (rng() < 0.15 && k > 1) k -= 1;
+
+  return pickDiscards(player.hand, used, st.calcTime, k);
 }
 
-const STATIC_CARD_VALUE = {
-  '^': 10, '!': 9, 'P': 5, '*': 4, '+': 3, '↑↑': 3,
+
+// ============================================================
+// どの札を残すか
+// ============================================================
+//
+// 以前は手書きの表だった。
+//     { '^': 10, '!': 9, 'P': 5, '*': 4, '+': 3, '↑↑': 3 } / 数字は 値×0.8
+// 根拠は「べき乗は強そう」程度の感覚で、実測ではない。
+// 実際これのせいで ↑↑（= + と同値）が数字の 4 や 5 より先に捨てられていた。
+//
+// tools/measure-card-values.js で測り直した。定義は
+//     loss(札) = 今の最良効用 − E[ その札を捨てて1枚引いた後の最良効用 ]
+// で、**大きいほど残すべき**。手札500通り × 5レベル × 1枚引き6サンプル。
+//
+// 測って分かったこと:
+//
+//   再現する（独立2回の順位相関 0.91〜0.95）:
+//     ・時間が長いとき  ^ と ! が突出（0.05 前後）。次いで ↑↑ と *
+//     ・時間が短いとき  ^ の価値は **負**。重い式を作っても間に合わないので、
+//                       持っていると却って悪い方へ引っ張られる
+//     ・手札に7以上の数字があると演算子の価値が跳ね上がる（^ は 0.025 → 0.051）
+//       「相方が居るから演算子が活きる」が数字に出た形
+//
+//   再現しない:
+//     ・数字どうしの順位。全部 ±0.02 に収まり、測るたびに入れ替わる。
+//       32/54 枚が数字なので、特定の数字を抱える価値がほとんど無い。
+//       手書きの表がやっていた「9 > 8 > 7 > …」は**根拠が無かった**ので捨てた
+//     ・レベルによる違い。時間と文脈の効果に埋もれるので平均した
+//
+// 実行時に手札ごとに計算しないのは速度の問題。1回の評価に候補列挙が要り、
+// キャッシュを外すと 1.27ms。交換1回で数十回まわすと 25〜500ms かかり、
+// 毎秒600回の交換判断を回す学習には2〜3桁足りない。
+// **オフラインで測って表にし、実行時はただ引く**。
+
+const CARD_KEEP_VALUE_RAW = {
+  short: {
+    big: { 'n2': 0.0212, 'n3': -0.0013, 'n4': -0.0024, 'n5': 0.0130, 'n6': -0.0143, 'n7': -0.0149, 'n8': -0.0125, 'n9': -0.0169, 'o+': 0.0276, 'o*': 0.0206, 'o^': -0.0123, 'o!': 0.0087, 'oP': -0.0177, 'o↑↑': 0.0215 },
+    small: { 'n2': 0.0096, 'n3': -0.0086, 'n4': 0.0008, 'n5': 0.0024, 'n6': 0.0016, 'n7': -0.0149, 'n8': -0.0125, 'n9': -0.0169, 'o+': -0.0003, 'o*': -0.0007, 'o^': 0.0031, 'o!': -0.0029, 'oP': -0.0105, 'o↑↑': 0.0121 },
+  },
+  long: {
+    big: { 'n2': 0.0097, 'n3': -0.0131, 'n4': -0.0089, 'n5': -0.0062, 'n6': -0.0207, 'n7': -0.0136, 'n8': -0.0100, 'n9': -0.0095, 'o+': 0.0093, 'o*': 0.0154, 'o^': 0.0509, 'o!': 0.0456, 'oP': -0.0003, 'o↑↑': 0.0136 },
+    small: { 'n2': 0.0011, 'n3': -0.0120, 'n4': 0.0071, 'n5': -0.0000, 'n6': 0.0149, 'n7': -0.0136, 'n8': -0.0100, 'n9': -0.0095, 'o+': -0.0312, 'o*': -0.0222, 'o^': 0.0248, 'o!': 0.0267, 'oP': -0.0246, 'o↑↑': 0.0061 },
+  },
 };
 
-function cardStaticValue(card) {
-  if (card.type === 'operator') return STATIC_CARD_VALUE[card.value] || 3;
-  return Number(card.value) * 0.8;
+/** 時間の区切り。これより短ければ「重い式は作れない」側の表を使う */
+const KEEP_VALUE_SHORT_SEC = 150;
+/** この値以上の数字を持っていれば「相方が居る」文脈 */
+const KEEP_VALUE_BIG_DIGIT = 7;
+
+function cardKeepKey(card) {
+  return (card.type === 'number' ? 'n' : 'o') + card.value;
+}
+
+/**
+ * その札を残す価値。大きいほど残すべき（＝捨てるのは小さい順）。
+ *
+ * @param {Array} [hand] 手札。渡すと文脈（7以上の数字を持っているか）を見る
+ * @param {number} [seconds] 計算時間。渡すと短時間用の表に切り替える
+ */
+function cardStaticValue(card, hand, seconds) {
+  const tb = (seconds != null && seconds < KEEP_VALUE_SHORT_SEC) ? 'short' : 'long';
+  const big = hand
+    ? hand.some(c => c.type === 'number' && Number(c.value) >= KEEP_VALUE_BIG_DIGIT)
+    : true;
+  const row = CARD_KEEP_VALUE_RAW[tb][big ? 'big' : 'small'];
+  const v = row[cardKeepKey(card)];
+  return v == null ? 0 : v;
+}
+
+/**
+ * 今すぐ使う札に乗せる下駄（測定値と同じ単位）。
+ *
+ * **これだけは判断値。** 上の表は測ったものだが、これは測っていない。
+ * 「今組んでいる式を壊すのは、余り札を1枚失うより痛い」という重みで、
+ * 測定値の幅（±0.05）の中ほどに置いてある。
+ *
+ * 0 にすると今の式を平気で壊す。大きくしすぎると
+ * 「使っていないが強い札（! など）」が絶対に残らなくなり、
+ * 手を組み替える動きが消える。
+ */
+const USED_CARD_BONUS = 0.03;
+
+/**
+ * 捨てる順（先に捨てたい札から）。
+ *
+ * 以前は「使わない札を全部先に捨てる」という2段構えだった。
+ * これだと **使っていないが強い札が必ず捨てられる**。
+ * 実際 `!` や `↑↑` が余っていると無条件に切られていた。
+ * 1つのスコアに畳んで、強い余り札が弱い使用札より残れるようにする。
+ */
+function discardOrder(hand, usedIds, seconds) {
+  const score = (c) => cardStaticValue(c, hand, seconds)
+    + (usedIds && usedIds.has(c.id) ? USED_CARD_BONUS : 0);
+  return hand.slice().sort((a, b) => score(a) - score(b));
+}
+
+/**
+ * 実際に捨てる札を決める。順序は discardOrder、枚数は呼び出し側が決める。
+ *
+ * **数字を最低1枚は残す。** 測定上どの数字も「替えが利く」ので、
+ * 素直に順序どおり切ると演算子だけが手元に残ることがある（実際に起きた）。
+ * 引き直しで数字が来る確率は高い（山札の 32/54 が数字）が、
+ * 外すと式が1つも作れず自動的に失格になる。確率の問題ではなく
+ * **ゲームのルール上の制約**なので、順序より優先して守る。
+ */
+function pickDiscards(hand, usedIds, seconds, k) {
+  const order = discardOrder(hand, usedIds, seconds);
+  const take = Math.max(0, Math.min(k, hand.length, 5));
+  const discard = order.slice(0, take);
+
+  const keptNumbers = hand.length - discard.length > 0
+    ? hand.filter(c => c.type === 'number' && !discard.includes(c)).length
+    : 0;
+  if (keptNumbers === 0) {
+    // 捨てる予定の中で一番「残す価値」が高い数字を呼び戻す
+    const back = discard.filter(c => c.type === 'number').pop();
+    if (back) discard.splice(discard.indexOf(back), 1);
+  }
+  return discard.map(c => c.id);
 }
 
 // ============================================================
@@ -1005,7 +1113,7 @@ const AI = {
   decideBet, decideExchange, handStrength, evaluateBetSizes, resolveBetChoice,
   calcTimeForPot, expectedCalcTime, plannedCalcTime, beatsOneOpponent, callProbability,
   placePayouts, icmEquity, icmAfterDelta,
-  OPPONENT_MODEL, BET_MODEL, BET_ACTIONS, cardsUsed, cardStaticValue,
+  OPPONENT_MODEL, BET_MODEL, BET_ACTIONS, cardsUsed, cardStaticValue, discardOrder, pickDiscards,
 };
 
 if (typeof module !== 'undefined' && module.exports) {
