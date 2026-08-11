@@ -680,6 +680,17 @@ function plannedCalcTime(game, playerIdx, profile, model = OPPONENT_MODEL) {
       && (game.phase === 'CALCULATION' || game.phase === 'SHOWDOWN')) {
     return game.calculationTimeLimit;
   }
+
+  // ベット中だけ「これから出す額」を織り込む。
+  //
+  // 交換フェーズでは自分は賭けていない。そこで evaluateBetSizes を呼ぶと
+  // 「いまオールインしたら」まで含めた仮定の話になり、時間が上振れする。
+  // 賭けていない場面では **今そこにあるポット** を使う。
+  // 交換の時点なら、それは第1ラウンドが終わったあとのポット。
+  if (game.phase !== 'BETTING_1' && game.phase !== 'BETTING_2') {
+    return calcTimeForPot(game.pot, game.config);
+  }
+
   const ev = evaluateBetSizes(game, playerIdx, profile, model, false);
   return ev.best ? ev.best.calcTime : expectedCalcTime(game, 0);
 }
