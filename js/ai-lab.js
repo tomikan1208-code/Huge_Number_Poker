@@ -814,7 +814,6 @@
   function readHandConditions() {
     return {
       level: $('hand-level').value,
-      seconds: Math.max(1, Number($('hand-seconds').value) || 1),
       trials: Math.max(1, Math.min(20000, Math.floor(Number($('hand-trials').value) || 1))),
       opponents: Math.max(1, Math.floor(Number($('hand-opponents').value) || 1)),
       seed: Math.floor(Number($('hand-seed').value) || 0),
@@ -834,76 +833,15 @@
     const cond = readHandConditions();
     const t0 = performance.now();
     const model = AILib.OPPONENT_MODEL;
-
     const profile = COGN.getProfile(cond.level);
-    const cands = AILib.candidateSet(state.hand, profile);
-    if (cands.length === 0) {
+
+    if (AILib.candidateSet(state.hand, profile).length === 0) {
       errBox.textContent = 'この手札からは1つも式が作れない（数字が1枚も無い等）。';
       $('hand-results').classList.add('hidden');
       return;
     }
 
-    const pick = AILib.chooseCandidate(cands, cond.seconds, profile, cond.opponents, model);
-    const mc = monteCarlo(pick.cand, cond, profile, pick.cand.value);
-
-    // ---- 選んだ式 ----
-    $('hand-pick-formula').innerHTML = FE.toMathHTML(pick.cand.formula) || esc(pick.cand.formula);
-    $('hand-pick-value').textContent =
-      `${pick.cand.value.toString()} ／ ${MODE_LABEL[pick.cand.analysis.answerMode] || ''}`;
-
-    const theory = $('hand-pick-theory');
-    theory.textContent = pct(pick.pCorrect);
-    theory.className = `lab-rate-value ${rateClass(pick.pCorrect)}`;
-    $('hand-pick-theory-sub').textContent =
-      `所要 ${formatSeconds(pick.cand.analysis.requiredTime)} ／ beat ${pick.beat.toFixed(3)} ／ 効用 ${pick.utility.toFixed(3)}`;
-
-    const measured = $('hand-pick-measured');
-    measured.textContent = pct(mc.rate);
-    measured.className = `lab-rate-value ${rateClass(mc.rate)}`;
-    $('hand-pick-measured-sub').textContent =
-      `${mc.n} 回中 ${mc.correct} 回正解（±${(mc.ci * 100).toFixed(1)}pt）／ ⏱${mc.timedOut}`;
-
-    // ---- 候補一覧 ----
-    $('hand-cand-table').innerHTML = cands.map((c) => {
-      const u = AILib.candidateUtility(c, cond.seconds, profile, cond.opponents, model);
-      const isPicked = c.formula === pick.cand.formula;
-      return `
-        <tr class="${isPicked ? 'is-picked' : ''}">
-          <td class="lab-formula-cell">${isPicked ? '■ ' : ''}${esc(c.formula)}</td>
-          <td class="lab-value-cell">${esc(c.value.toString())}</td>
-          <td>${esc(c.analysis.answerMode)}</td>
-          <td class="num">${c.analysis.requiredTime.toFixed(1)}</td>
-          <td class="num">${c.analysis.wmPeak.toFixed(1)}</td>
-          <td class="num">${u.pCorrect.toFixed(3)}</td>
-          <td class="num">${u.beat.toFixed(3)}</td>
-          <td class="num">${u.utility.toFixed(3)}</td>
-        </tr>`;
-    }).join('');
-
-    // ---- レベルごとの選択 ----
-    $('hand-level-table').innerHTML = LEVELS.map((lv) => {
-      const p = COGN.getProfile(lv);
-      const cs = AILib.candidateSet(state.hand, p);
-      if (cs.length === 0) {
-        return `<tr><td>${esc(p.name)}</td><td colspan="6" class="lab-muted">式を作れない</td></tr>`;
-      }
-      const best = AILib.chooseCandidate(cs, cond.seconds, p, cond.opponents, model);
-      const lvMc = monteCarlo(best.cand, cond, p, best.cand.value);
-      return `
-        <tr class="${lv === cond.level ? 'is-current' : ''}">
-          <td>${esc(p.name)}<span class="lab-muted">（${esc(p.label)}）</span></td>
-          <td class="lab-formula-cell">${esc(best.cand.formula)}</td>
-          <td class="lab-value-cell">${esc(best.cand.value.toString())}</td>
-          <td class="num">${best.cand.analysis.requiredTime.toFixed(1)}</td>
-          <td class="num">${pct(best.pCorrect)}</td>
-          <td class="num">${pct(lvMc.rate)}</td>
-          <td class="lab-bar-cell">
-            <span class="lab-bar" style="width:${Math.max(2, best.pCorrect * 120)}px;background:${LEVEL_COLOR[lv]};"></span>
-          </td>
-        </tr>`;
-    }).join('');
-
-    // ---- 仮想の卓で1ハンド回す ----
+    // ---- 仮想の卓で1ハンド回す。計算時間はここで決まる ----
     const table = readTableConditions();
     const sim = simulateHand(state.hand, cond, table);
     renderBetScene('r1', sim.r1);
@@ -925,6 +863,102 @@
     }
     parts.push(`乱数シード ${cond.seed} を変えると、相手の手札と交換の引きが変わる。`);
     $('scene-summary').innerHTML = parts.join(' ');
+
+    // ---- ④ 候補と比較 ----
+    //
+    // 「どの手札を、何秒で」見るかは ①③ と揃えないと意味がない。
+    // 以前はここだけ「条件」欄の秒数（既定60秒）を使っていたので、
+    // ③ が10分で考えている式と ④ が並べる式が食い違っていた。
+    // 計算時間はポットから決まるものなので、卓の結果から取る。
+    const when = document.querySelector('input[name="cand-when"]:checked');
+    const after = (when ? when.value : 'after') === 'after' && sim.handAfter;
+    const view = after
+      ? { hand: sim.handAfter, label: '交換後の手札' }
+      : { hand: sim.r1 ? sim.r1.hand : state.hand, label: '交換前の手札' };
+
+    // 実際の計算フェーズの制限時間。そこまで進まなかったときはその時点の見積もり
+    const calcTime = sim.calcTime
+      || (sim.r2 && sim.r2.ev.best ? sim.r2.ev.best.calcTime : 0)
+      || (sim.r1 && sim.r1.ev.best ? sim.r1.ev.best.calcTime : 60);
+    const shown = { ...cond, seconds: calcTime };
+
+    $('cand-context').innerHTML =
+      `<strong>${esc(view.label)}</strong> を <strong>${esc(formatSeconds(calcTime))}</strong> で解く場合。`
+      + (sim.calcTime
+        ? ' この秒数は実際に計算フェーズまで進めて出したもの（ポット＝制限時間）。'
+        : ' 計算フェーズまで進まなかったので、直近のベットからの見積もり。')
+      + ` 相手 ${cond.opponents} 人。`;
+
+    const cands = AILib.candidateSet(view.hand, profile);
+    if (cands.length === 0) {
+      $('hand-cand-table').innerHTML =
+        '<tr><td colspan="8" class="lab-muted">この手札からは式を作れない</td></tr>';
+      $('hand-level-table').innerHTML = '';
+      $('hand-pick-formula').textContent = '–';
+      $('hand-run-time').textContent = `計算 ${Math.round(performance.now() - t0)} ms`;
+      $('hand-results').classList.remove('hidden');
+      return;
+    }
+
+    const pick = AILib.chooseCandidate(cands, calcTime, profile, cond.opponents, model);
+    const mc = monteCarlo(pick.cand, shown, profile, pick.cand.value);
+
+    // ---- 選んだ式 ----
+    $('hand-pick-formula').innerHTML = FE.toMathHTML(pick.cand.formula) || esc(pick.cand.formula);
+    $('hand-pick-value').textContent =
+      `${pick.cand.value.toString()} ／ ${MODE_LABEL[pick.cand.analysis.answerMode] || ''}`;
+
+    const theory = $('hand-pick-theory');
+    theory.textContent = pct(pick.pCorrect);
+    theory.className = `lab-rate-value ${rateClass(pick.pCorrect)}`;
+    $('hand-pick-theory-sub').textContent =
+      `所要 ${formatSeconds(pick.cand.analysis.requiredTime)} ／ beat ${pick.beat.toFixed(3)} ／ 効用 ${pick.utility.toFixed(3)}`;
+
+    const measured = $('hand-pick-measured');
+    measured.textContent = pct(mc.rate);
+    measured.className = `lab-rate-value ${rateClass(mc.rate)}`;
+    $('hand-pick-measured-sub').textContent =
+      `${mc.n} 回中 ${mc.correct} 回正解（±${(mc.ci * 100).toFixed(1)}pt）／ ⏱${mc.timedOut}`;
+
+    // ---- 候補一覧 ----
+    $('hand-cand-table').innerHTML = cands.map((c) => {
+      const u = AILib.candidateUtility(c, calcTime, profile, cond.opponents, model);
+      const isPicked = c.formula === pick.cand.formula;
+      return `
+        <tr class="${isPicked ? 'is-picked' : ''}">
+          <td class="lab-formula-cell">${isPicked ? '■ ' : ''}${esc(c.formula)}</td>
+          <td class="lab-value-cell">${esc(c.value.toString())}</td>
+          <td>${esc(c.analysis.answerMode)}</td>
+          <td class="num">${c.analysis.requiredTime.toFixed(1)}</td>
+          <td class="num">${c.analysis.wmPeak.toFixed(1)}</td>
+          <td class="num">${u.pCorrect.toFixed(3)}</td>
+          <td class="num">${u.beat.toFixed(3)}</td>
+          <td class="num">${u.utility.toFixed(3)}</td>
+        </tr>`;
+    }).join('');
+
+    // ---- レベルごとの選択 ----
+    $('hand-level-table').innerHTML = LEVELS.map((lv) => {
+      const p = COGN.getProfile(lv);
+      const cs = AILib.candidateSet(view.hand, p);
+      if (cs.length === 0) {
+        return `<tr><td>${esc(p.name)}</td><td colspan="6" class="lab-muted">式を作れない</td></tr>`;
+      }
+      const best = AILib.chooseCandidate(cs, calcTime, p, cond.opponents, model);
+      const lvMc = monteCarlo(best.cand, shown, p, best.cand.value);
+      return `
+        <tr class="${lv === cond.level ? 'is-current' : ''}">
+          <td>${esc(p.name)}<span class="lab-muted">（${esc(p.label)}）</span></td>
+          <td class="lab-formula-cell">${esc(best.cand.formula)}</td>
+          <td class="lab-value-cell">${esc(best.cand.value.toString())}</td>
+          <td class="num">${best.cand.analysis.requiredTime.toFixed(1)}</td>
+          <td class="num">${pct(best.pCorrect)}</td>
+          <td class="num">${pct(lvMc.rate)}</td>
+          <td class="lab-bar-cell">
+            <span class="lab-bar" style="width:${Math.max(2, best.pCorrect * 120)}px;background:${LEVEL_COLOR[lv]};"></span>
+          </td>
+        </tr>`;
+    }).join('');
 
     $('hand-run-time').textContent = `計算 ${Math.round(performance.now() - t0)} ms`;
     $('hand-results').classList.remove('hidden');
@@ -1041,7 +1075,7 @@
 
     const out = {
       r1: null, exchange: null, r2: null,
-      log: [], forcedContinue: false, endedAt: '', game,
+      log: [], forcedContinue: false, endedAt: '', game, calcTime: 0,
       handBefore: myHand.slice(), handAfter: null,
     };
 
@@ -1156,7 +1190,9 @@
         continue;
       }
 
-      out.endedAt = phase;   // CALCULATION まで来たら十分
+      // CALCULATION まで来れば制限時間が確定する。これが「実際に解く秒数」。
+      if (phase === 'CALCULATION') out.calcTime = game.calculationTimeLimit;
+      out.endedAt = phase;
       break;
     }
 
@@ -1435,8 +1471,10 @@
         + `捨てたのは ${ex.discarded.map((c) => c.display != null ? c.display : c.value).join(' ')}。`
         + '乱数シードを変えると引きが変わる。';
 
-    // 交換で手札が良くなったのか悪くなったのかを、同じ計算時間で比べる
-    const t = sim.r1 ? sim.r1.ev.best.calcTime : cond.seconds;
+    // 交換で手札が良くなったのか悪くなったのかを、同じ計算時間で比べる。
+    // 実際の計算フェーズの秒数があればそれを使う（両方を同じ物差しで測るのが要点）。
+    const t = sim.calcTime
+      || (sim.r1 && sim.r1.ev.best ? sim.r1.ev.best.calcTime : 60);
     const beforeBest = AILib.chooseCandidate(
       AILib.candidateSet(ex.before, profile), t, profile, cond.opponents, model);
     const afterBest = AILib.chooseCandidate(
@@ -1559,7 +1597,6 @@
     $('btn-hand-random').addEventListener('click', () => dealRandomHand(readHandConditions().seed));
     $('btn-hand-clear').addEventListener('click', () => { state.hand = []; renderHand(); });
     $('btn-hand-run').addEventListener('click', runHand);
-    linkNumberAndRange('hand-seconds', 'hand-seconds-range', () => {});
     fillLevelSelect($('table-opplevel'));
 
     // 卓の条件を変えたら、結果が出ているときだけ引き直す
@@ -1574,6 +1611,10 @@
     // 手入力 ↔ おまかせ
     document.querySelectorAll('input[name="table-mode"]').forEach((r) => {
       r.addEventListener('change', () => { applyTableMode(); rerun(); });
+    });
+    // ④ を交換前／交換後どちらで見るか
+    document.querySelectorAll('input[name="cand-when"]').forEach((r) => {
+      r.addEventListener('change', rerun);
     });
     applyTableMode();
 
