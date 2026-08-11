@@ -787,4 +787,5 @@ if (typeof window !== 'undefined') {
   window.CARD_DEFS = CARD_DEFS;
   window.MAX_FORMULA_CARDS = MAX_FORMULA_CARDS;
   window.HAND_SIZE = HAND_SIZE;
+  window.DEFAULT_CONFIG = DEFAULT_CONFIG;
 }

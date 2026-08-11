@@ -1018,6 +1018,8 @@
   }
 
   const MY_SEAT = 0;
+  /** 計算フェーズの制限時間の上限（game.js の DEFAULT_CONFIG.maxCalcTime）*/
+  const MAX_CALC_SEC = (window.DEFAULT_CONFIG && window.DEFAULT_CONFIG.maxCalcTime) || 600;
 
   /**
    * 手札7枚と卓の条件から1ハンドを回す。
@@ -1180,6 +1182,7 @@
             };
             out.handAfter = p.hand.slice();
             out.exchange.strength = exStrength;
+            out.exchange.pot = game.pot;      // 第1ラウンド終了時のポット
             out.exchange.betPlan = exBet && exBet.best ? exBet.best : null;
           }
           if (i === MY_SEAT) {
@@ -1427,37 +1430,35 @@
         + '最良候補が使わない札から切り、手が弱いときは使用中の札にも踏み込む。';
     if (exFormula) {
       note += ` 守っているのは ${exFormula}`
-        + `（計算時間 ${formatSeconds(exSt.calcTime)} で見たときの最良候補）。`;
+        + `（第1ラウンド終了時のポット ${sim.exchange.pot} → 計算時間 ${formatSeconds(exSt.calcTime)}`
+        + ' で見たときの最良候補）。';
     }
     $('hand-exchange-note').textContent = note;
 
-    // 交換の瞬間に「守る式」と「ベットするなら狙う式」が一致しているかを見る。
-    // plannedCalcTime で見積もりを揃えたので、ここは常に一致するはず。
-    // ずれたらモデルが壊れたサインなので、検知器として残してある。
+    // 交換の時点でどの秒数を使っているか。以前ここが「いまオールインしたら」まで
+    // 織り込んでいて、賭けてもいないのに上振れしていた。今は素直に
+    // 「第1ラウンドが終わった時点のポット」を使う。
     const r1Pick = sim.r1 && sim.r1.ev.best ? sim.r1.ev.best.pick : null;
-    const exPlan = ex.betPlan ? ex.betPlan.pick.cand.formula : null;
+    const capped = exSt.calcTime >= (MAX_CALC_SEC - 0.5);
     const mismatch = $('hand-exchange-mismatch');
+    const bits = [];
 
-    if (exFormula && exPlan && exFormula !== exPlan) {
-      mismatch.classList.remove('hidden');
-      mismatch.classList.add('lab-reason-bad');
-      mismatch.innerHTML =
-        `<strong>交換とベットが同じ瞬間に違う式を見ている。</strong>`
-        + ` 交換は <span class="lab-mono">${esc(exFormula)}</span>、`
-        + ` ベットは <span class="lab-mono">${esc(exPlan)}</span>。`
-        + ` この2つは <code>plannedCalcTime()</code> で揃えてあるので、`
-        + ` ここが出るのは<strong>モデルが壊れているサイン</strong>。`;
-    } else if (exFormula && r1Pick && exFormula !== r1Pick.cand.formula) {
-      // これは正常。第1ラウンドの読みと、交換時点の読みが違うだけ。
-      mismatch.classList.remove('hidden');
-      mismatch.classList.remove('lab-reason-bad');
-      mismatch.innerHTML =
-        `第1ラウンドでは <span class="lab-mono">${esc(r1Pick.cand.formula)}</span>`
-        + `（計算時間 ${esc(formatSeconds(sim.r1.ev.best.calcTime))}）を狙っていたが、`
+    if (capped) {
+      bits.push(`計算時間が上限の ${formatSeconds(MAX_CALC_SEC)} に達している`
+        + `（ポット ${sim.exchange.pot} が上限を超えているため）。`
+        + 'ここから先はポットを積んでも時間は伸びない。');
+    }
+    if (r1Pick && exFormula && exFormula !== r1Pick.cand.formula) {
+      bits.push(`第1ラウンドでは <span class="lab-mono">${esc(r1Pick.cand.formula)}</span>`
+        + `（${esc(formatSeconds(sim.r1.ev.best.calcTime))}）を狙っていたが、`
         + ` 交換の時点では <span class="lab-mono">${esc(exFormula)}</span>`
         + `（${esc(formatSeconds(exSt.calcTime))}）に変わっている。`
-        + ` 間に相手が賭けてポットが動いたぶん、狙う式も動く。<strong>これは正常</strong> ——`
-        + ` 交換とベットは同じ瞬間には同じ式を見ている。`;
+        + ' 間に相手が賭けてポットが動いたぶん、狙う式も動く。');
+    }
+    if (bits.length) {
+      mismatch.classList.remove('hidden');
+      mismatch.classList.remove('lab-reason-bad');
+      mismatch.innerHTML = bits.join(' ');
     } else {
       mismatch.classList.add('hidden');
     }
