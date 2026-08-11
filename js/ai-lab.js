@@ -1204,8 +1204,28 @@
     return used;
   }
 
-  /** カードを並べて出す。keep に無い札は「捨てる」表示にする */
-  function renderCardRow(container, hand, keepIds, discardLabel) {
+  /**
+   * カードを並べて出す。手札の並びは変えない（並べ替えるとどれが動いたのか追えなくなる）。
+   *
+   * 印の付け方をパネルごとに変える。ここを共通にしていたせいで
+   * 「式に使う札」と「交換で残す札」がまったく同じ見た目になり、
+   * 隣り合った2つのパネルが同じものに見えていた。
+   * 実際この2つは中身もほぼ一致する（交換は最良候補が使う札を残すため）ので、
+   * **色で意味を分けないと区別がつかない**。
+   *
+   * @param {Set} marked  印を付けるカードのID
+   * @param {'use'|'toss'|'drawn'} mode
+   *        use   … 緑枠＝式に使う / 残りは薄く（余り）
+   *        toss  … 赤枠＝捨てる   / 残りはそのまま（残す）
+   *        drawn … 緑枠＝引いた   / 残りはそのまま（元から持っていた）
+   */
+  function renderCardRow(container, hand, marked, mode) {
+    const STYLE = {
+      use:   { on: 'card-keep',  onTitle: '式に使う',   off: 'card-dim',  offTitle: 'この式では使わない' },
+      toss:  { on: 'card-toss',  onTitle: '捨てる',     off: '',          offTitle: '残す' },
+      drawn: { on: 'card-keep',  onTitle: '引いた札',   off: 'card-dim',  offTitle: '元から持っていた札' },
+    }[mode];
+
     container.innerHTML = '';
     if (hand.length === 0) {
       container.innerHTML = '<span class="lab-empty-msg">なし</span>';
@@ -1213,13 +1233,10 @@
     }
     for (const card of hand) {
       const el = createCardEl(card);
-      if (!keepIds.has(card.id)) {
-        el.classList.add('card-discard');
-        el.title = discardLabel;
-      } else {
-        el.classList.add('card-keep');
-        el.title = '使う';
-      }
+      const hit = marked.has(card.id);
+      const cls = hit ? STYLE.on : STYLE.off;
+      if (cls) el.classList.add(cls);
+      el.title = hit ? STYLE.onTitle : STYLE.offTitle;
       container.appendChild(el);
     }
   }
@@ -1318,7 +1335,7 @@
     // ---- 使う予定のカード ----
     if (planPick) {
       const used = cardsForCandidate(hand, planPick.cand);
-      renderCardRow($(`${n}-plan-cards`), hand, used, 'この式では使わない');
+      renderCardRow($(`${n}-plan-cards`), hand, used, 'use');
       $(`${n}-plan-note`).textContent =
         `${planPick.cand.formula} に使う ${used.size} 枚（緑の枠）。`
         + `残り ${hand.length - used.size} 枚は余り`
@@ -1360,9 +1377,10 @@
       return;
     }
 
+    // 捨てる札のほうに印を付ける。「残す札が緑」だと式のパネルと同じ絵になって
+    // 見分けがつかないので、ここは **赤枠＝捨てる** で描く。
     const discardIds = new Set(ex.discarded.map((c) => c.id));
-    const keepIds = new Set(ex.before.filter((c) => !discardIds.has(c.id)).map((c) => c.id));
-    renderCardRow($('hand-exchange-cards'), ex.before, keepIds, '捨てる');
+    renderCardRow($('hand-exchange-cards'), ex.before, discardIds, 'toss');
 
     // 交換が守ろうとしている式。ベットの予定と食い違うことがあるので、そのまま出す。
     const exSt = ex.strength;
@@ -1410,7 +1428,7 @@
 
     // ---- 引き直した結果 ----
     const drawnIds = new Set(ex.drawn.map((c) => c.id));
-    renderCardRow($('hand-after-cards'), ex.after, drawnIds, '元から持っていた札');
+    renderCardRow($('hand-after-cards'), ex.after, drawnIds, 'drawn');
     $('hand-after-note').textContent = ex.drawn.length === 0
       ? '引き直しなし'
       : `緑の枠が引いた ${ex.drawn.length} 枚。`
