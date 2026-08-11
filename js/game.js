@@ -85,6 +85,7 @@ const DEFAULT_CONFIG = {
   ante: 5,
   betTimeLimit: 10,
   dealerTimeLimit: 20,
+  showdownTimeLimit: 20,   // ショーダウンを見ていられる秒数（オンラインの自動進行に使う）
   levelUpHands: 5,
   deckCount: 1,
   autoCalcMode: false,
@@ -113,6 +114,9 @@ class Game {
     this.log = [];
     this.calculationTimeLimit = 0;
     this.gameOver = false;
+    // ショーダウン時に確定する配当（メイン/サイドポットの分配結果）。
+    // settle() はこれを適用するだけなので、表示と実際の増減が必ず一致する。
+    this.settlement = null;
   }
 
   // ============================================================
@@ -204,6 +208,7 @@ class Game {
     this.betRound = 1;
     this.winners = [];
     this.showdownResults = [];
+    this.settlement = null;
     this._uiCalcStarted = false;
     this._uiExchangeAnnounced = false;
     this._aiCalcPlan = null;      // CPUの提出予定（ui.js が使う）
@@ -615,6 +620,8 @@ class Game {
           formula: p === winner ? p.formula : null,
           valueString: null,
         }));
+      const ranks = this.players.map(p => (p === winner ? 0 : null));
+      this.settlement = this._computeSettlement(ranks);
       this._log(`${winner.name} が不戦勝（他全員フォールド）`);
       return;
     }
@@ -662,6 +669,16 @@ class Game {
         .map(r => ({ player: r.player }));
     }
 
+    // サイドポット用の順位表（0が最上位・同値は同順位・資格なしは null）。
+    // オールインの階層ごとに「誰が取れるか」を決めるのに使う。
+    const ranks = this.players.map(() => null);
+    let place = 0;
+    contenders.forEach((r, i) => {
+      if (i > 0 && r._value.compare(contenders[i - 1]._value) !== 0) place = i;
+      ranks[this.players.indexOf(r.player)] = place;
+    });
+    this.settlement = this._computeSettlement(ranks);
+
     // 表示順: 評価値の降順 → 失格 → 未提出 → フォールド
     const rank = { correct: 0, incorrect: 1, invalid: 2, nosubmit: 3, fold: 4 };
     const display = results.slice().sort((a, b) => {
@@ -680,38 +697,131 @@ class Game {
   }
 
   // ============================================================
-  // 精算
+  // 精算（メインポット / サイドポット）
   // ============================================================
+
+  /**
+   * ポットを「拠出額の階層」に切り分ける。
+   * 50 しか出せずオールインした人が、1000 出した人のチップまで
+   * 持っていってしまわないようにするための、ポーカーの基本処理。
+   *
+   * 例) 拠出 50 / 1010 / 1020 なら
+   *   メインポット   50×3 = 150   （3人全員が取り得る）
+   *   サイドポット1  960×2 = 1920 （50の人は取れない）
+   *   サイドポット2  10×1 = 10    （最後の1人に返る）
+   *
+   * @param {(number|null)[]} ranks プレイヤーindex→順位（null は取る資格なし）
+   */
+  _buildPots(ranks) {
+    const contribs = this.players.map(p => Math.max(0, p.totalBet || 0));
+    const levels = [...new Set(contribs.filter(c => c > 0))].sort((a, b) => a - b);
+
+    const pots = [];
+    let prev = 0;
+    for (const level of levels) {
+      const layer = level - prev;
+      prev = level;
+      if (layer <= 0) continue;
+
+      const contributors = [];
+      contribs.forEach((c, i) => { if (c >= level) contributors.push(i); });
+      const eligible = contributors.filter(i => ranks[i] != null);
+
+      pots.push({
+        label: pots.length === 0 ? 'メインポット' : `サイドポット${pots.length}`,
+        layer,
+        amount: layer * contributors.length,
+        contributors,
+        eligible,
+      });
+    }
+
+    // 前ハンドからの持ち越しなど、誰の拠出でもないチップはメインポットに乗せる
+    const contributed = contribs.reduce((a, b) => a + b, 0);
+    const extra = Math.max(0, this.pot - contributed);
+    if (extra > 0 && pots.length > 0) pots[0].amount += extra;
+
+    return pots;
+  }
+
+  /**
+   * 各ポットの取り手を決めて、配当と持ち越しを確定する。
+   * ショーダウン時点で確定するので、画面に出る金額と実際の増減が必ず一致する。
+   */
+  _computeSettlement(ranks) {
+    const pots = this._buildPots(ranks);
+    const payouts = this.players.map(() => 0);
+    const refunds = this.players.map(() => 0);
+    const potResults = [];
+    let carryOver = 0;
+
+    for (const pot of pots) {
+      if (pot.amount <= 0) continue;
+
+      // 取れる資格のある人がいないポットは、出した人にそのまま返す
+      if (pot.eligible.length === 0) {
+        pot.contributors.forEach(i => { refunds[i] += pot.layer; });
+        carryOver += pot.amount - pot.layer * pot.contributors.length;
+        potResults.push({
+          label: pot.label, amount: pot.amount, winners: [], refunded: true,
+        });
+        continue;
+      }
+
+      const best = Math.min(...pot.eligible.map(i => ranks[i]));
+      const winners = pot.eligible.filter(i => ranks[i] === best);
+      const share = Math.floor(pot.amount / winners.length);
+      carryOver += pot.amount % winners.length;
+      winners.forEach(i => { payouts[i] += share; });
+
+      potResults.push({
+        label: pot.label, amount: pot.amount, winners, share, refunded: false,
+      });
+    }
+
+    // どのポットにも取り手がいない = 全員失格。持ち越さず全額返す。
+    const noWinnerAtAll = potResults.every(r => r.refunded);
+    if (pots.length === 0) carryOver += this.pot;
+
+    return {
+      pots: potResults,
+      payouts,
+      refunds,
+      carryOver,
+      noWinnerAtAll,
+      // 表示用: そのプレイヤーが最終的に受け取る額
+      totals: payouts.map((v, i) => v + refunds[i]),
+    };
+  }
 
   settle() {
     if (this.phase === PHASES.SETTLEMENT) return;
     this.phase = PHASES.SETTLEMENT;
 
-    if (this.winners.length === 0) {
-      // 勝者なし（全員が失格）→ 持ち越さず、出した分をそのまま返す。
-      // 全員スコア0の同点扱いなので、チップの移動は起きない。
-      let refunded = 0;
-      for (const p of this.players) {
-        if (p.isEliminated || p.totalBet <= 0) continue;
-        p.chips += p.totalBet;
-        refunded += p.totalBet;
-        if (p.chips > 0) p.isAllIn = false;
-      }
-      // 前ハンドの端数など、誰の拠出でもない分だけが残る
-      this.carryOver = Math.max(0, this.pot - refunded);
-      this.pot = 0;
+    const s = this.settlement || this._computeSettlement(this.players.map(() => null));
+
+    this.players.forEach((p, i) => {
+      const gain = (s.payouts[i] || 0) + (s.refunds[i] || 0);
+      if (gain > 0) p.chips += gain;
+    });
+
+    if (s.noWinnerAtAll) {
+      const refunded = s.refunds.reduce((a, b) => a + b, 0);
       this._log(`勝者なし（全員スコア0の同点）。ポット ${refunded} は払い戻し`);
     } else {
-      const share = Math.floor(this.pot / this.winners.length);
-      const remainder = this.pot % this.winners.length;
-      for (const w of this.winners) {
-        w.player.chips += share;
-        this._log(`${w.player.name} が ${share} チップ獲得`);
+      for (const r of s.pots) {
+        if (r.refunded) {
+          this._log(`${r.label} ${r.amount} は取り手がいないため拠出者へ返還`);
+        } else {
+          const names = r.winners.map(i => this.players[i].name).join('、');
+          this._log(`${r.label} ${r.amount} → ${names} が ${r.share} ずつ獲得`);
+        }
       }
-      this.carryOver = remainder;
-      this.pot = 0;
-      if (remainder > 0) this._log(`端数 ${remainder} は次ハンドへ持ち越し`);
     }
+
+    this.carryOver = s.carryOver;
+    this.pot = 0;
+    if (s.carryOver > 0) this._log(`端数 ${s.carryOver} は次ハンドへ持ち越し`);
 
     // 脱落判定（配列から削除せずフラグで管理する。
     // 削除するとオンライン側の room.players とインデックスがずれるため）

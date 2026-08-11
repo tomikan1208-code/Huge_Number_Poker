@@ -798,14 +798,12 @@ function showShowdown() {
   winnerDiv.innerHTML = '';
   if (game.winners.length > 0) {
     const names = game.winners.map(w => w.player.name).join('、');
-    const share = Math.floor(game.pot / game.winners.length);
     const n = document.createElement('div');
     n.className = 'winner-name';
     n.textContent = `🏆 ${names}`;
-    const a = document.createElement('div');
-    a.className = 'winner-amount';
-    a.textContent = `${share} チップ獲得！`;
-    winnerDiv.append(n, a);
+    winnerDiv.append(n);
+    winnerDiv.append(...buildPotBreakdown(game.settlement,
+      (i) => game.players[i] ? game.players[i].name : `P${i + 1}`));
     gameAudio.playWin();
   } else {
     const n = document.createElement('div');

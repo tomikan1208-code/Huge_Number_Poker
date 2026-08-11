@@ -1353,6 +1353,26 @@ body {
   margin-top: 0.3rem;
 }
 
+/* オールインでポットが割れたときの内訳（メイン/サイド） */
+.showdown-winner .pot-line {
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+  margin-top: 0.35rem;
+}
+
+.showdown-winner .pot-line-label {
+  color: var(--gold);
+  font-weight: bold;
+}
+
+.showdown-winner .pot-line-to {
+  color: var(--text-primary);
+}
+
 .next-hand-btn {
   display: block;
   margin: 1.5rem auto 0;

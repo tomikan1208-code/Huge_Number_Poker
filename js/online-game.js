@@ -428,14 +428,12 @@
       const names = gameState.players
         .filter(p => gameState.winners.includes(p.id))
         .map(p => p.name).join('、');
-      const share = Math.floor(gameState.pot / gameState.winners.length);
       const n = document.createElement('div');
       n.className = 'winner-name';
       n.textContent = `🏆 ${names}`;
-      const a = document.createElement('div');
-      a.className = 'winner-amount';
-      a.textContent = `${share} チップ獲得！`;
-      winnerDiv.append(n, a);
+      winnerDiv.append(n);
+      winnerDiv.append(...buildPotBreakdown(gameState.settlement,
+        (i) => gameState.players[i] ? gameState.players[i].name : `P${i + 1}`));
       gameAudio.playWin();
     } else {
       const n = document.createElement('div');
@@ -448,7 +446,27 @@
       gameAudio.playLose();
     }
 
+    renderNextHandButton();
     $('online-showdown-overlay').classList.remove('hidden');
+  }
+
+  /** 「次のハンドへ」に、あと何人待っているかを出す */
+  function renderNextHandButton() {
+    const btn = $('online-btn-next-hand');
+    if (!btn) return;
+
+    const info = gameState.nextHand || { ready: [], needed: 0 };
+    const iAmReady = info.ready.includes(myPlayerIndex);
+
+    if (isSpectator) {
+      btn.textContent = '観戦中';
+      btn.disabled = true;
+      return;
+    }
+    btn.disabled = iAmReady;
+    btn.textContent = iAmReady
+      ? `他のプレイヤーを待っています（${info.ready.length}/${info.needed}）`
+      : (info.needed > 1 ? `次のハンドへ（${info.ready.length}/${info.needed}）` : '次のハンドへ');
   }
 
   function buildShowdownItem(result, idx, isWinner) {
@@ -589,8 +607,10 @@
         : `→ ${parsed.value.toString()} として解釈`;
     });
 
+    // 全員が押すか制限時間切れで進むので、押しても画面は閉じない
     $('online-btn-next-hand').addEventListener('click', () => {
-      $('online-showdown-overlay').classList.add('hidden');
+      const btn = $('online-btn-next-hand');
+      btn.disabled = true;
       mgr.sendAction('next-hand', {});
     });
 

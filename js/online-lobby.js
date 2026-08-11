@@ -30,6 +30,8 @@ const hostSettings   = document.getElementById('host-settings');
 
 let gameInitialized = false;
 
+const MAX_ROOM_PLAYERS = 8; // server.js と揃えること
+
 const showStatus = (msg, isError = false) => {
   statusMsg.textContent = msg;
   statusMsg.style.color = isError ? '#e85555' : '#f5c842';
@@ -109,17 +111,46 @@ function switchToGame() {
   setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
 }
 
+// ===== 再入室の記憶 =====
+// リロードやタブの復帰でゲームから弾き出されないよう、部屋と名前を覚えておく。
+const REJOIN_KEY = 'hnp-rejoin';
+
+function rememberSeat(roomCode, playerName, asSpectator) {
+  try {
+    sessionStorage.setItem(REJOIN_KEY, JSON.stringify({ roomCode, playerName, asSpectator }));
+  } catch (e) { /* プライベートモードなどでは諦める */ }
+}
+
+function forgetSeat() {
+  try { sessionStorage.removeItem(REJOIN_KEY); } catch (e) { /* noop */ }
+}
+
+function savedSeat() {
+  try { return JSON.parse(sessionStorage.getItem(REJOIN_KEY) || 'null'); } catch (e) { return null; }
+}
+
 // ===== Socket.ioコールバック =====
 om.init({
   onRoomCreated: ({ roomCode, roomState }) => {
+    rememberSeat(roomCode, om.playerName, false);
     switchToLobby(roomCode);
     renderLobby(roomState);
     showStatus('部屋を作成しました。参加者を待っています...');
   },
 
-  onRoomJoined: ({ roomCode, roomState }) => {
+  onRoomJoined: ({ roomCode, roomState, isRejoin }) => {
+    rememberSeat(roomCode, om.playerName, om.myRole === 'spectator');
     switchToLobby(roomCode);
     renderLobby(roomState);
+
+    // 進行中の部屋に入った（＝再入室・途中観戦）なら、ロビーではなく卓に戻す。
+    // ここを通さないと、サーバーが状態を送っていてもロビーで固まる。
+    if (roomState?.started) {
+      switchToGame();
+      om.requestFullState();
+      showStatus(isRejoin ? 'ゲームに復帰しました。' : '観戦を開始しました。');
+      return;
+    }
     showStatus('部屋に参加しました。');
   },
 
@@ -149,10 +180,11 @@ om.init({
   },
 
   onJoinError: (msg) => {
+    forgetSeat();
     const jpMsg = {
-      'Room is full': '部屋が満員です',
+      'Room is full': `部屋が満員です（最大${MAX_ROOM_PLAYERS}人）`,
       'Room not found': '部屋が見つかりません',
-      'Game already started': 'ゲームが既に開始されています',
+      'Game already started': 'ゲームが既に開始されています（観戦なら入れます）',
     }[msg] || msg;
     showStatus(jpMsg, true);
   },
@@ -196,6 +228,7 @@ btnSpectate?.addEventListener('click', () => {
 });
 
 btnCancel?.addEventListener('click', () => {
+  forgetSeat();
   location.reload();
 });
 
@@ -209,6 +242,7 @@ btnStart?.addEventListener('click', () => {
     ante: parseInt(document.getElementById('online-ante')?.value) || 5,
     betTimeLimit: parseInt(document.getElementById('online-bet-time')?.value) || 10,
     dealerTimeLimit: parseInt(document.getElementById('online-dealer-time')?.value) || 20,
+    showdownTimeLimit: parseInt(document.getElementById('online-showdown-time')?.value) || 20,
     levelUpHands: parseInt(document.getElementById('online-level-up')?.value) || 5,
     deckCount: parseInt(document.getElementById('online-deck-count')?.value) || 1,
     autoCalcMode: document.getElementById('online-auto-calc')?.checked || false,
@@ -228,6 +262,19 @@ nameInput?.addEventListener('keydown', (e) => {
     else btnCreate?.click();
   }
 });
+
+// ===== リロード後の自動復帰 =====
+// 通信が切れた・アプリを切り替えた・うっかり再読み込みした、で
+// 席に戻れなくなるのを防ぐ。失敗しても普通のロビーが出るだけ。
+(function autoRejoin() {
+  const seat = savedSeat();
+  if (!seat || !seat.roomCode || !seat.playerName) return;
+
+  if (nameInput) nameInput.value = seat.playerName;
+  if (codeInput) codeInput.value = seat.roomCode;
+  showStatus(`部屋 ${seat.roomCode} に復帰しています...`);
+  om.joinRoom(seat.roomCode, seat.playerName, !!seat.asSpectator);
+})();
 
 // 中央通知
 window.showCenterNotification = (msg, duration = 3000) => {

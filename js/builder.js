@@ -53,6 +53,55 @@ function createStandardCardElement(card) {
   return el;
 }
 
+/**
+ * ショーダウンの配当内訳（メインポット / サイドポット）を DOM で組み立てる。
+ * ローカル対戦とオンラインで同じ見た目にするため共通化している。
+ *
+ * @param {object} settlement game.settlement
+ * @param {(index:number)=>string} nameOf プレイヤーindex→表示名
+ * @returns {HTMLElement[]} winner-amount 行の配列
+ */
+function buildPotBreakdown(settlement, nameOf) {
+  const rows = [];
+  const pots = (settlement && settlement.pots) || [];
+  if (pots.length === 0) return rows;
+
+  const potLine = (p) => {
+    const line = document.createElement('div');
+    line.className = 'pot-line';
+    const label = document.createElement('span');
+    label.className = 'pot-line-label';
+    label.textContent = `${p.label} ${p.amount}`;
+    const to = document.createElement('span');
+    to.className = 'pot-line-to';
+    to.textContent = p.refunded
+      ? '→ 拠出者へ返還'
+      : `→ ${p.winners.map(nameOf).join('、')}（${p.share} ずつ）`;
+    line.append(label, to);
+    return line;
+  };
+
+  const won = pots.filter(p => !p.refunded);
+  const returned = pots.filter(p => p.refunded);
+
+  // 全部のポットを同じ人が取ったなら、内訳を並べても読みにくいだけなので合計で出す
+  const sameWinner = won.length > 0 && won.every(p =>
+    p.winners.length === won[0].winners.length &&
+    p.winners.every((w, i) => w === won[0].winners[i]));
+
+  if (sameWinner) {
+    const line = document.createElement('div');
+    line.className = 'winner-amount';
+    line.textContent = `${won.reduce((a, p) => a + p.share, 0)} チップ獲得！`;
+    rows.push(line);
+  } else {
+    won.forEach(p => rows.push(potLine(p)));
+  }
+
+  returned.forEach(p => rows.push(potLine(p)));
+  return rows;
+}
+
 class FormulaBuilder {
   /**
    * @param {Object} opts
@@ -498,4 +547,5 @@ if (typeof window !== 'undefined') {
   window.FormulaBuilder = FormulaBuilder;
   window.prefersReducedMotion = prefersReducedMotion;
   window.createStandardCardElement = createStandardCardElement;
+  window.buildPotBreakdown = buildPotBreakdown;
 }

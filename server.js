@@ -52,6 +52,16 @@ app.use((req, res) => res.status(404).type('text/plain').send('Not Found'));
 
 const rooms = new Map(); // roomId -> Room
 
+// テーブルの上限。これとは別に、開始時に「デッキが足りるか」も見る。
+const MAX_ROOM_PLAYERS = 8;
+const CARDS_PER_HAND = 7;
+const CARDS_PER_DECK = 54; // 数字32 + 演算子22
+
+/** デッキ数から何人まで配れるか */
+function seatCapacity(deckCount) {
+  return Math.floor((CARDS_PER_DECK * Math.max(1, deckCount)) / CARDS_PER_HAND);
+}
+
 /*
 Room構造:
 {
@@ -98,6 +108,7 @@ function createRoom(roomId, hostSocket, hostName) {
     phaseTimer: null,
     deadline: null,
     _timerKey: null,
+    readyForNext: new Set(), // ショーダウンで「次へ」を押した socket.id
   };
   rooms.set(roomId, room);
   return room;
@@ -133,15 +144,25 @@ function inheritHost(room) {
     room.players.forEach(p => p.isHost = (p.id === nextHost.id));
     return true;
   }
+
+  // 観戦者をプレイヤーに繰り上げられるのは、ゲームが始まる前だけ。
+  // 開始後は game.players の席数が固定なので、席の無いプレイヤーができてしまう。
   const specCandidates = room.spectators.filter(s => s.connected);
-  if (specCandidates.length > 0) {
+  if (specCandidates.length > 0 && !room.started && room.players.length < MAX_ROOM_PLAYERS) {
     const nextHost = specCandidates[0];
     room.spectators = room.spectators.filter(s => s.id !== nextHost.id);
     nextHost.role = 'player';
     nextHost.index = room.players.length;
-    nextHost.isHost = true;
     room.hostId = nextHost.id;
     room.players.push(nextHost);
+    room.players.forEach(p => p.isHost = (p.id === nextHost.id));
+    return true;
+  }
+
+  // 繰り上げられないときは、観戦者にホスト権だけ渡す（部屋の設定・開始はできる）
+  if (specCandidates.length > 0) {
+    room.hostId = specCandidates[0].id;
+    room.players.forEach(p => { p.isHost = false; });
     return true;
   }
   return false;
@@ -212,13 +233,38 @@ function makeGameStateForClient(room, clientSocketId) {
     betRound: game.betRound,
     players,
     winners: game.winners.map(w => w.player.id),
-    showdownResults: game.showdownResults,
+    // showdownResults の player はゲーム内部のオブジェクトそのもので hand を持つ。
+    // そのまま流すと全員の手札（フォールドした人の分まで）が漏れるので、
+    // 表示に必要な id と名前だけに落とす。
+    showdownResults: (game.showdownResults || []).map(r => ({
+      player: { id: r.player.id, name: r.player.name },
+      status: r.status,
+      formula: r.formula,
+      valueString: r.valueString,
+    })),
+    settlement: game.settlement,
+    nextHand: nextHandReadyInfo(room),
     log: game.log,
     calculationTimeLimit: game.calculationTimeLimit,
     autoCalcMode: !!game.config.autoCalcMode,
     gameOver: game.isGameOver(),
     deadline: room.deadline || null,
   };
+}
+
+/** ショーダウンで「次へ」を押した人と、待っている人数 */
+function nextHandReadyInfo(room) {
+  const game = room.game;
+  if (!game) return { ready: [], needed: 0 };
+
+  const ready = [];
+  room.players.forEach((rp, i) => {
+    if (room.readyForNext.has(rp.id)) ready.push(i);
+  });
+  const needed = room.players.filter((rp, i) =>
+    rp.connected && game.players[i] && !game.players[i].isEliminated).length;
+
+  return { ready, needed };
 }
 
 /** 表示名を安全な範囲に切り詰める（HTML注入・極端に長い名前の防止） */
@@ -250,6 +296,7 @@ function startGame(room, settings) {
     ante: num(settings.ante, 5, 0, 5000),
     betTimeLimit: num(settings.betTimeLimit, 10, 5, 60),
     dealerTimeLimit: num(settings.dealerTimeLimit, 20, 10, 120),
+    showdownTimeLimit: num(settings.showdownTimeLimit, 20, 5, 120),
     levelUpHands: num(settings.levelUpHands, 5, 1, 20),
     deckCount: num(settings.deckCount, 1, 1, 3),
     autoCalcMode: !!settings.autoCalcMode,
@@ -292,6 +339,9 @@ function armPhaseTimer(room) {
     seconds = game.calculationTimeLimit;
   } else if (game.phase === PHASES.EXCHANGE) {
     seconds = Math.max(20, game.config.betTimeLimit * 3);
+  } else if (game.phase === PHASES.SHOWDOWN) {
+    // これが無いと、誰も「次のハンドへ」を押さなかった部屋が永久に止まる
+    seconds = game.config.showdownTimeLimit || 20;
   }
   if (seconds <= 0) return;
 
@@ -320,6 +370,10 @@ function onPhaseTimeout(room) {
     });
   } else if (game.phase === PHASES.CALCULATION) {
     game.finishCalculation();
+  } else if (game.phase === PHASES.SHOWDOWN) {
+    // 時間切れ。まだ押していない人がいても次のハンドへ進める。
+    advanceToNextHand(room);
+    return;
   }
 
   broadcastGameState(room);
@@ -336,12 +390,17 @@ function broadcastGameState(room) {
     armPhaseTimer(room);
   }
 
+  emitPerClient(room, 'game-update');
+}
+
+/**
+ * 部屋の全員に、それぞれ専用に整形したゲーム状態を送る。
+ * io.to(roomId).emit で1人分の状態を配ると、その1人の手札が全員に漏れる。
+ */
+function emitPerClient(room, event) {
   const roomState = makeRoomState(room);
-  for (const p of room.players) {
-    io.to(p.id).emit('game-update', { gameState: makeGameStateForClient(room, p.id), roomState });
-  }
-  for (const s of room.spectators) {
-    io.to(s.id).emit('game-update', { gameState: makeGameStateForClient(room, s.id), roomState });
+  for (const c of [...room.players, ...room.spectators]) {
+    io.to(c.id).emit(event, { gameState: makeGameStateForClient(room, c.id), roomState });
   }
 }
 
@@ -397,12 +456,34 @@ function checkPhaseTransition(room) {
   }
 }
 
-/** 次ハンドへ */
-function handleNextHand(room) {
+/**
+ * 「次のハンドへ」の意思表示。
+ * 1人が押しただけで全員を先に進めてしまうと、結果を読んでいる途中で画面が飛ぶ。
+ * 接続中の全員が押すか、ショーダウンの制限時間が切れたときだけ進める。
+ */
+function handleNextHand(room, socketId) {
+  const game = room.game;
+  if (!game || game.phase !== PHASES.SHOWDOWN) return { ok: true };
+
+  room.readyForNext.add(socketId);
+
+  const info = nextHandReadyInfo(room);
+  if (info.ready.length >= info.needed) {
+    advanceToNextHand(room);
+  } else {
+    broadcastGameState(room); // 「2/3人が待機中」を全員に見せる
+  }
+  return { ok: true };
+}
+
+/** 実際に精算して次のハンドを始める */
+function advanceToNextHand(room) {
   const game = room.game;
   if (!game) return;
   if (game.phase !== PHASES.SHOWDOWN) return; // 二重実行を防ぐ
 
+  clearRoomTimer(room);
+  room.readyForNext.clear();
   game.settle();
 
   if (game.isGameOver()) {
@@ -501,6 +582,10 @@ io.on('connection', (socket) => {
       callback?.({ ok: false, error: 'Game already started' });
       return;
     }
+    if (!asSpectator && room.players.length >= MAX_ROOM_PLAYERS) {
+      callback?.({ ok: false, error: 'Room is full' });
+      return;
+    }
 
     socket.join(roomId);
     socket.data.roomId = roomId;
@@ -562,14 +647,24 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const deckCount = Math.max(1, Math.min(3, parseInt(settings?.deckCount, 10) || 1));
+    const capacity = seatCapacity(deckCount);
+    if (room.players.length > capacity) {
+      callback?.({
+        ok: false,
+        error: `${room.players.length}人には ${deckCount}デッキでは足りません（このデッキ数で最大 ${capacity}人）`,
+      });
+      return;
+    }
+
     room.started = true;
+    room.readyForNext.clear();
     startGame(room, settings || {});
 
     console.log(`[ゲーム開始] ${roomId}: ${room.players.length}人`);
-    io.to(roomId).emit('game-started', {
-      gameState: makeGameStateForClient(room, socket.id),
-      roomState: makeRoomState(room),
-    });
+    // 1人分の状態を部屋全体に配ると、その人の手札が全員に見えてしまう。
+    // 必ず1人ずつ、その人向けに整形した状態を送る。
+    emitPerClient(room, 'game-started');
     callback?.({ ok: true });
   });
 
@@ -603,8 +698,7 @@ io.on('connection', (socket) => {
         result = handleSubmitFormula(room, player.index, data.formula || '', data.result || '');
         break;
       case 'next-hand':
-        handleNextHand(room);
-        result = { ok: true };
+        result = handleNextHand(room, socket.id);
         break;
       default:
         result = { ok: false, error: '不明なアクション' };
@@ -647,6 +741,7 @@ io.on('connection', (socket) => {
     if (player) player.connected = false;
     const spectator = room.spectators.find(s => s.id === socket.id);
     if (spectator) spectator.connected = false;
+    room.readyForNext.delete(socket.id);
 
     console.log(`[切断] ${socket.id} (${name}) from ${roomId}`);
     socket.to(roomId).emit('opponent-disconnected', { playerName: name, reason: 'disconnect' });
@@ -668,6 +763,16 @@ io.on('connection', (socket) => {
         rooms.delete(roomId);
       }, 30 * 60 * 1000);
       return;
+    }
+
+    // ショーダウンで待っている相手が抜けたなら、残り全員が押している時点で進める
+    if (room.game && room.game.phase === PHASES.SHOWDOWN) {
+      const info = nextHandReadyInfo(room);
+      if (info.needed > 0 && info.ready.length >= info.needed) {
+        advanceToNextHand(room);
+        emitRoomState(room);
+        return;
+      }
     }
 
     emitRoomState(room);
