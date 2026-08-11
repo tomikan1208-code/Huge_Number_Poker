@@ -682,18 +682,64 @@ html { background: var(--bg-primary); }
 
 /* 使う札 / 捨てる札。手札の並びは変えずに、見た目だけで区別する
    （並べ替えるとどのカードが動いたのか追えなくなる）*/
+.lab-plan-cards {
+  gap: 0.85rem;          /* 枠とバッジがはみ出すぶん、通常の手札より広く取る */
+  padding-top: 0.5rem;
+}
+
 .lab-plan-cards .card {
   cursor: default;
+  position: relative;    /* ✕ バッジを角に重ねるため */
 }
 .lab-plan-cards .card:hover {
   box-shadow: var(--shadow-card);
 }
 
+/* 緑枠 = 式に使う / 引いた札。赤枠と同じく内側に隙間を1本入れる */
 .lab-plan-cards .card-keep {
-  box-shadow: 0 0 0 2px var(--success), var(--shadow-card);
+  box-shadow:
+    0 0 0 2px var(--bg-secondary),
+    0 0 0 5px var(--success),
+    var(--shadow-card);
 }
 
-.lab-plan-cards .card-discard {
+/* 赤枠 = 捨てる。
+   「残す札を緑」にすると式のパネルとまったく同じ絵になって見分けがつかない
+   （交換は最良候補が使う札を残すので、中身もほぼ一致する）。
+   捨てる側に印を付けて、色でも意味を変える。
+
+   枠は **内側に地の色の隙間を1本挟んでから** 赤を置く。
+   隙間なしだと、赤いカード（^ など）の上で枠が同化して消える。 */
+.lab-plan-cards .card-toss {
+  box-shadow:
+    0 0 0 2px var(--bg-secondary),
+    0 0 0 5px var(--danger),
+    var(--shadow-card);
+  opacity: 0.8;
+}
+
+/* ✕ は塗りつぶしたバッジにする。文字だけだと札の色に負ける
+   （紫の ! や赤の ^ の上では読めなかった）。 */
+.lab-plan-cards .card-toss::after {
+  content: '✕';
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 2px solid var(--bg-secondary);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: bold;
+  line-height: 18px;
+  text-align: center;
+  z-index: 2;
+}
+
+/* 薄く = そのパネルでは対象外 */
+.lab-plan-cards .card-dim {
   opacity: 0.35;
   filter: grayscale(0.8);
 }
