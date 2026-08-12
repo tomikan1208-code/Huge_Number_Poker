@@ -574,3 +574,16 @@ kbd {
     border-bottom-width: 2px;
     border-radius: 4px;
 }
+
+/* 正史がどちらになったかの表示。黙って上書きしていると誤解されないように出す */
+.merge-note { display: none; }
+.merge-note.show {
+    display: block;
+    margin-bottom: .9rem;
+    padding: .6rem .85rem;
+    background: rgba(108, 140, 255, .08);
+    border-left: 3px solid var(--accent, #6c8cff);
+    border-radius: 0 6px 6px 0;
+    font-size: .84rem;
+    line-height: 1.8;
+}

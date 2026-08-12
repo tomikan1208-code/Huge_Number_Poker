@@ -111,11 +111,11 @@
 
     // ── グラフタブ ──
     function renderCharts() {
+        // ローカルと Colab は1本の履歴に畳んである（サーバー側 _canonical）。
+        // ここで2系列に分けない。「別々の実験」ではなく「同じ学習の続き」なので。
         const recs = state.range > 0 ? state.history.slice(-state.range) : state.history;
-        const colabRecs = state.range > 0 ? state.colab.slice(-state.range) : state.colab;
-        const all = recs.concat(colabRecs).map((r) => r.episode).filter((e) => e != null);
-        const xMin = all.length ? Math.min.apply(null, all) : undefined;
-        const xMax = all.length ? Math.max.apply(null, all) : undefined;
+        const xMin = recs.length ? recs[0].episode : undefined;
+        const xMax = recs.length ? recs[recs.length - 1].episode : undefined;
 
         // 指標ごとに1枚。単位の違うものを1つのグラフに混ぜない（2軸は作らない）
         $('chartCards').innerHTML = state.config.metrics.map(function (m, i) {
@@ -134,20 +134,7 @@
                 ? { label: '%', min: 0, max: 100, format: (v) => v.toFixed(0) + '%' }
                 : { label: '', format: (v) => Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(3) };
             const tip = (v) => m.fmt === 'rate' ? v.toFixed(1) + '%' : v.toFixed(4);
-            const series = [{ key: m.key, label: 'ローカル', points: points, tipFormat: tip }];
-
-            // Colab で回した結果は **点線の別系列** で重ねる。
-            // 同じ配列に混ぜるとどちらで出た数字か分からなくなるので混ぜない。
-            if (state.colab.length) {
-                series.push({
-                    key: m.key + '_colab', label: 'Colab', dash: true,
-                    points: colabRecs.map(function (r) {
-                        const v = r[m.key];
-                        return { x: r.episode, y: (v === null || v === undefined) ? null : v * scale };
-                    }),
-                    tipFormat: tip,
-                });
-            }
+            const series = [{ key: m.key, label: '学習の推移', points: points, tipFormat: tip }];
 
             MDDChart.render($('chart' + i), {
                 height: 240, xLabel: '世代', xMin: xMin, xMax: xMax,
@@ -155,9 +142,7 @@
                 axes: { left: axis },
                 emptyText: 'まだ記録がありません。',
             });
-            // 2系列（ローカル + Colab）のときだけ凡例を出す。
-            // どちらの線か分からないと比較の意味が無い。
-            MDDChart.renderLegend($('legend' + i), series);
+            MDDChart.renderLegend($('legend' + i), series);   // 1系列なので出ない
         });
     }
 
@@ -165,7 +150,8 @@
     async function loadHistory() {
         const data = await getJSON('/api/history');
         state.history = data.records || [];
-        state.colab = data.colab_records || [];
+        state.merge = data.merge || null;
+        renderMergeNote();
         renderProgress();
         renderTable();
         renderCharts();
@@ -211,16 +197,39 @@
         if (f.kind === 'log') {
             kind = '学習ログ';
             body = f.gens + ' 世代（最終 ' + f.last_episode + '）';
+        } else if (f.kind === 'checkpoint') {
+            kind = 'チェックポイント';
+            body = 'これがあると続きから学習できる';
         } else if (f.kind === 'policy') {
             kind = '重み';
             body = 'obs_dim ' + (f.obs_dim == null ? '?' : f.obs_dim)
                 + (f.episode ? ' / ' + f.episode + '世代' : '');
         }
-        const adopt = f.kind === 'policy'
-            ? '<button class="btn btn-ghost" data-adopt="' + esc(f.name) + '">ゲームに反映</button>'
+        const label = { policy: 'ゲームに反映', checkpoint: '学習に採用', log: '履歴を採用' }[f.kind];
+        const adopt = label
+            ? '<button class="btn btn-ghost" data-adopt="' + esc(f.name) + '">' + label + '</button>'
             : '';
         return '<tr><td>' + esc(f.name) + '</td><td>' + kind + '</td><td>' + esc(body)
             + '</td><td>' + esc(f.mtime) + ' / ' + bytes(f.size) + '</td><td>' + adopt + '</td></tr>';
+    }
+
+    /** どちらが正史になっているかを画面に出す。黙って上書きしない */
+    function renderMergeNote() {
+        const el = $('mergeNote');
+        if (!el) return;
+        const m = state.merge;
+        if (!m || !m.has_colab) { el.textContent = ''; el.className = 'merge-note'; return; }
+        const canon = m.canon === 'colab' ? 'Colab' : 'ローカル';
+        const other = m.canon === 'colab' ? 'ローカル' : 'Colab';
+        el.className = 'merge-note show';
+        el.innerHTML =
+            '1本の履歴に畳んでいます。'
+            + '<b>ローカル ' + m.local_max + ' 世代</b> / <b>Colab ' + m.colab_max + ' 世代</b> — '
+            + '先まで進んでいる <b>' + canon + '</b> を正史にしました。'
+            + (m.overlap
+                ? '重なった ' + m.overlap + ' 世代は ' + canon + ' の値で上書きし、'
+                  + canon + 'に無い世代は ' + other + ' から補っています。'
+                : '重なりはありません。');
     }
 
     function colabMsg(text, ok) {
@@ -296,6 +305,18 @@
             });
         });
         drop.addEventListener('drop', (e) => uploadColab(e.dataTransfer.files));
+
+        $('colabContinueBtn').addEventListener('click', async function () {
+            if (!confirm('Colab の結果を引き継ぎます。\n\n'
+                + '・学習ログ → 手元の履歴を置き換え\n'
+                + '・チェックポイント → ここから学習を続けられる状態に\n'
+                + '・重み → ゲーム本体へ反映\n\n'
+                + '手元の同名ファイルは上書きされます。よろしいですか？')) return;
+            const res = await post('/api/colab/continue');
+            colabMsg(res.message, res.ok);
+            await loadColab();
+            await loadHistory();
+        });
 
         $('colabClearBtn').addEventListener('click', async function () {
             if (!confirm('取り込んだファイルを消します。よろしいですか？')) return;
