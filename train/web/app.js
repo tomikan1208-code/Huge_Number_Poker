@@ -7,7 +7,7 @@
     'use strict';
 
     const $ = (id) => document.getElementById(id);
-    const state = { config: null, status: {}, history: [], range: 0, logVersion: null };
+    const state = { config: null, status: {}, history: [], colab: [], range: 0, logVersion: null };
 
     // ── 表示ヘルパー ──
     const fmt = {
@@ -112,13 +112,16 @@
     // ── グラフタブ ──
     function renderCharts() {
         const recs = state.range > 0 ? state.history.slice(-state.range) : state.history;
-        const xMin = recs.length ? recs[0].episode : undefined;
-        const xMax = recs.length ? recs[recs.length - 1].episode : undefined;
+        const colabRecs = state.range > 0 ? state.colab.slice(-state.range) : state.colab;
+        const all = recs.concat(colabRecs).map((r) => r.episode).filter((e) => e != null);
+        const xMin = all.length ? Math.min.apply(null, all) : undefined;
+        const xMax = all.length ? Math.max.apply(null, all) : undefined;
 
         // 指標ごとに1枚。単位の違うものを1つのグラフに混ぜない（2軸は作らない）
         $('chartCards').innerHTML = state.config.metrics.map(function (m, i) {
             return '<div class="card"><div class="card-head"><div class="card-title">'
-                + esc(m.label) + '</div></div><div class="chart-box" id="chart' + i + '"></div></div>';
+                + esc(m.label) + '</div><div class="legend" id="legend' + i + '"></div></div>'
+                + '<div class="chart-box" id="chart' + i + '"></div></div>';
         }).join('');
 
         state.config.metrics.forEach(function (m, i) {
@@ -130,13 +133,31 @@
             const axis = m.fmt === 'rate'
                 ? { label: '%', min: 0, max: 100, format: (v) => v.toFixed(0) + '%' }
                 : { label: '', format: (v) => Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(3) };
+            const tip = (v) => m.fmt === 'rate' ? v.toFixed(1) + '%' : v.toFixed(4);
+            const series = [{ key: m.key, label: 'ローカル', points: points, tipFormat: tip }];
+
+            // Colab で回した結果は **点線の別系列** で重ねる。
+            // 同じ配列に混ぜるとどちらで出た数字か分からなくなるので混ぜない。
+            if (state.colab.length) {
+                series.push({
+                    key: m.key + '_colab', label: 'Colab', dash: true,
+                    points: colabRecs.map(function (r) {
+                        const v = r[m.key];
+                        return { x: r.episode, y: (v === null || v === undefined) ? null : v * scale };
+                    }),
+                    tipFormat: tip,
+                });
+            }
+
             MDDChart.render($('chart' + i), {
                 height: 240, xLabel: '世代', xMin: xMin, xMax: xMax,
-                series: [{ key: m.key, label: m.label, points: points,
-                           tipFormat: (v) => m.fmt === 'rate' ? v.toFixed(1) + '%' : v.toFixed(4) }],
+                series: series,
                 axes: { left: axis },
                 emptyText: 'まだ記録がありません。',
             });
+            // 2系列（ローカル + Colab）のときだけ凡例を出す。
+            // どちらの線か分からないと比較の意味が無い。
+            MDDChart.renderLegend($('legend' + i), series);
         });
     }
 
@@ -144,6 +165,7 @@
     async function loadHistory() {
         const data = await getJSON('/api/history');
         state.history = data.records || [];
+        state.colab = data.colab_records || [];
         renderProgress();
         renderTable();
         renderCharts();
@@ -170,6 +192,120 @@
     }
 
     // ── 起動 ──
+    // ══════════════════════════════════════════════════
+    // Colab タブ
+    // ══════════════════════════════════════════════════
+    //
+    // Google Drive API での自動同期はやらない。
+    // OAuth クライアントID の発行から始まる手順は「学習を回したいだけ」に対して重すぎる。
+    // Colab の最後のセルが zip を1つ出すので、それをここに放り込む方式にした。
+    // 認証情報が要らないぶん、壊れる場所も少ない。
+
+    function bytes(n) {
+        return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB'
+            : n > 1024 ? (n / 1024).toFixed(0) + ' KB' : n + ' B';
+    }
+
+    function colabRow(f) {
+        let kind = 'その他', body = '';
+        if (f.kind === 'log') {
+            kind = '学習ログ';
+            body = f.gens + ' 世代（最終 ' + f.last_episode + '）';
+        } else if (f.kind === 'policy') {
+            kind = '重み';
+            body = 'obs_dim ' + (f.obs_dim == null ? '?' : f.obs_dim)
+                + (f.episode ? ' / ' + f.episode + '世代' : '');
+        }
+        const adopt = f.kind === 'policy'
+            ? '<button class="btn btn-ghost" data-adopt="' + esc(f.name) + '">ゲームに反映</button>'
+            : '';
+        return '<tr><td>' + esc(f.name) + '</td><td>' + kind + '</td><td>' + esc(body)
+            + '</td><td>' + esc(f.mtime) + ' / ' + bytes(f.size) + '</td><td>' + adopt + '</td></tr>';
+    }
+
+    function colabMsg(text, ok) {
+        const el = $('colabMsg');
+        el.textContent = text || '';
+        el.className = 'colab-msg' + (text ? (ok ? ' ok' : ' ng') : '');
+    }
+
+    async function loadColab() {
+        const st = await getJSON('/api/colab/state');
+        state.colabState = st;
+        $('colabUrl').textContent = st.notebook_url || 'リポジトリのURLを判定できませんでした';
+        $('colabOpenBtn').disabled = !st.notebook_url;
+        $('colabExpect').textContent = 'このモードのログは ' + st.expects;
+        // どのブランチを開くかは事故のもとなので明示する。
+        // ブランチ名は URL から切り出さない（claude/foo のようにスラッシュを含むと欠ける）。
+        $('colabBranchNote').textContent = st.branch
+            ? 'ブランチ ' + st.branch + '（リモートの既定ブランチ）を開きます。'
+              + 'push していないコミットは Colab から見えません。'
+            : '';
+        const files = st.files || [];
+        $('colabTableBody').innerHTML = files.length
+            ? files.map(colabRow).join('')
+            : '<tr><td colspan="5" class="muted">まだ取り込んでいません</td></tr>';
+        document.querySelectorAll('#colabTableBody [data-adopt]').forEach(function (b) {
+            b.addEventListener('click', async function () {
+                if (!confirm(b.dataset.adopt + ' をゲーム本体に反映します（上書き）。よろしいですか？')) return;
+                const res = await post('/api/colab/adopt', { name: b.dataset.adopt });
+                colabMsg(res.message, res.ok);
+            });
+        });
+    }
+
+    async function uploadColab(fileList) {
+        if (!fileList || !fileList.length) return;
+        const fd = new FormData();
+        for (const f of fileList) fd.append('files', f);
+        colabMsg('取り込んでいます…', true);
+        const res = await fetch('/api/colab/import', { method: 'POST', body: fd });
+        const data = await res.json();
+        colabMsg(data.message, data.ok);
+        await loadColab();
+        await loadHistory();          // グラフに点線で出るように
+    }
+
+    function setupColab() {
+        $('colabOpenBtn').addEventListener('click', function () {
+            const url = state.colabState && state.colabState.notebook_url;
+            if (url) window.open(url, '_blank', 'noopener');
+        });
+        $('colabCopyBtn').addEventListener('click', async function () {
+            const url = state.colabState && state.colabState.notebook_url;
+            if (!url) return;
+            try {
+                await navigator.clipboard.writeText(url);
+                colabMsg('URLをコピーしました', true);
+            } catch (e) {
+                colabMsg('コピーできませんでした。下のURLを手で選んでください', false);
+            }
+        });
+
+        const drop = $('colabDrop'), input = $('colabFile');
+        drop.addEventListener('click', () => input.click());
+        input.addEventListener('change', () => uploadColab(input.files));
+        ['dragenter', 'dragover'].forEach(function (ev) {
+            drop.addEventListener(ev, function (e) {
+                e.preventDefault(); drop.classList.add('over');
+            });
+        });
+        ['dragleave', 'drop'].forEach(function (ev) {
+            drop.addEventListener(ev, function (e) {
+                e.preventDefault(); drop.classList.remove('over');
+            });
+        });
+        drop.addEventListener('drop', (e) => uploadColab(e.dataTransfer.files));
+
+        $('colabClearBtn').addEventListener('click', async function () {
+            if (!confirm('取り込んだファイルを消します。よろしいですか？')) return;
+            const res = await post('/api/colab/clear');
+            colabMsg(res.message, res.ok);
+            await loadColab();
+            await loadHistory();
+        });
+    }
+
     async function init() {
         state.config = await getJSON('/api/config');
         document.title = state.config.title;
@@ -184,6 +320,7 @@
                 btn.classList.add('active');
                 $('view-' + btn.dataset.tab).classList.add('active');
                 if (btn.dataset.tab === 'charts') renderCharts();
+                if (btn.dataset.tab === 'colab') loadColab();
             });
         });
         document.querySelectorAll('#rangeButtons button').forEach(function (btn) {
@@ -217,7 +354,9 @@
             if (!res.ok) alert(res.message);
         });
 
+        setupColab();
         await loadHistory();
+        await loadColab();
         connect();
     }
 

@@ -17,6 +17,8 @@ import sys
 import json
 import time
 import shutil
+import zipfile
+import io
 import threading
 import subprocess
 from flask import Flask, jsonify, request, send_from_directory, Response
@@ -112,6 +114,100 @@ def _mtime(path):
         return os.path.getmtime(path)
     except OSError:
         return 0.0
+
+
+# ══════════════════════════════════════════════════
+# Colab 連携
+# ══════════════════════════════════════════════════
+#
+# Colab は GPU/CPU を無料で長時間回せるが、手元のGUIとは切り離されている。
+# ここを繋ぐやり方は2つある。
+#
+#   A) Google Drive API で自動同期（OAuth クライアントID・credentials.json が要る）
+#   B) Colab が出したファイルを手で取り込む
+#
+# **B を採る。** A は Google Cloud のプロジェクト作成から始まり、
+# 「学習を回したいだけ」に対して手順が重すぎる。
+# B なら Colab の最後のセルが zip を1つダウンロードするので、
+# それをこの画面に放り込めば終わる。認証情報は一切要らない。
+#
+# 取り込んだものは models/colab/ に置き、**ローカルの学習結果を上書きしない**。
+# グラフでは点線の別系列として重ねて描く（どちらの結果か見分けが付くように）。
+
+COLAB_DIR = os.path.join(_BASE, 'models', 'colab')
+# ゲーム本体が読む重みの置き場（train.py の POLICY_JSON と対応）
+GAME_MODELS_DIR = os.path.join(_BASE, '..', 'models')
+NOTEBOOK_PATH = 'train/colab_train.ipynb'
+
+
+def _git(*args):
+    try:
+        out = subprocess.run(['git'] + list(args), cwd=_BASE,
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() if out.returncode == 0 else ''
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def colab_notebook_url():
+    """このリポジトリのノートブックを Colab で開く URL と、そのブランチ名。
+
+    Colab は GitHub 上の .ipynb を直接開ける（Drive へのアップロードは要らない）。
+      https://colab.research.google.com/github/<owner>/<repo>/blob/<branch>/<path>
+
+    ブランチは「今チェックアウトしているもの」ではなく、
+    **push 済みで Colab から見えるもの** でなければならない。
+    追跡ブランチが取れなければ main にする。
+    """
+    remote = _git('remote', 'get-url', 'origin')
+    m = re.search(r'github\.com[:/](.+?)(?:\.git)?$', remote)
+    if not m:
+        return None, None
+    slug = m.group(1)
+
+    # 今チェックアウトしているブランチではなく **リモートの既定ブランチ** を指す。
+    # 作業ブランチは push されていなかったり後で消えたりするので、
+    # そこを指した URL は他人の環境で開けない。
+    head = _git('symbolic-ref', '--short', 'refs/remotes/origin/HEAD')
+    branch = head.split('/', 1)[1] if '/' in head else ''
+    if not branch:
+        # origin/HEAD が無いリポジトリもある。存在するほうを選ぶ。
+        for cand in ('main', 'master'):
+            if _git('rev-parse', '--verify', '--quiet', f'refs/remotes/origin/{cand}'):
+                branch = cand
+                break
+    branch = branch or 'main'
+    url = (f'https://colab.research.google.com/github/{slug}/blob/{branch}/'
+           f'{NOTEBOOK_PATH}')
+    return url, branch
+
+
+def colab_files():
+    """取り込み済みのファイル一覧。世代数も数えて出す（中身が空でないかの確認）"""
+    if not os.path.isdir(COLAB_DIR):
+        return []
+    out = []
+    for name in sorted(os.listdir(COLAB_DIR)):
+        path = os.path.join(COLAB_DIR, name)
+        if not os.path.isfile(path):
+            continue
+        info = {'name': name, 'size': os.path.getsize(path),
+                'mtime': time.strftime('%Y-%m-%d %H:%M', time.localtime(_mtime(path)))}
+        if name.endswith('_log.json'):
+            recs = _read_json(path, [])
+            gens = [r for r in recs if isinstance(r, dict) and r.get('episode')]
+            info['kind'] = 'log'
+            info['gens'] = len(gens)
+            info['last_episode'] = max((r['episode'] for r in gens), default=0)
+        elif name.startswith('policy_'):
+            w = _read_json(path, {})
+            info['kind'] = 'policy'
+            info['obs_dim'] = w.get('obs_dim')
+            info['episode'] = w.get('episode')
+        else:
+            info['kind'] = 'other'
+        out.append(info)
+    return out
 
 
 def python_exe():
@@ -235,11 +331,8 @@ class TrainingManager:
         return False
 
     # ── 世代データ（ディスクが正） ──
-    def _disk_records(self):
-        log_file = self.log_file
-        mtime = _mtime(log_file)
-        if self._log_cache['mtime'] == mtime:
-            return self._log_cache['records']
+    def _parse_log(self, log_file):
+        """ログJSONを表示用のレコード列にする"""
         records = []
         for item in _read_json(log_file, []):
             if not isinstance(item, dict) or 'episode' not in item:
@@ -254,8 +347,28 @@ class TrainingManager:
                                 if isinstance(v, (int, float))}
             records.append(rec)
         records.sort(key=lambda r: r['episode'] or 0)
+        return records
+
+    def _disk_records(self):
+        log_file = self.log_file
+        mtime = _mtime(log_file)
+        if self._log_cache['mtime'] == mtime:
+            return self._log_cache['records']
+        records = self._parse_log(log_file)
         self._log_cache = {'mtime': mtime, 'records': records}
         return records
+
+    def colab_log_path(self):
+        """取り込んだ Colab 側の、同じレベルのログ"""
+        return os.path.join(COLAB_DIR, os.path.basename(self.log_file))
+
+    def colab_records(self):
+        """Colab で回した結果。ローカルとは混ぜず、別系列として返す。
+
+        混ぜると「どちらで出た数字か」が分からなくなる。
+        グラフでは点線で重ねて、比べられるようにする。
+        """
+        return self._parse_log(self.colab_log_path())
 
     def records(self):
         """ディスクの確定値に、標準出力のライブ値を重ねる。SSEが頻繁に呼ぶのでキャッシュする。"""
@@ -334,7 +447,92 @@ def api_status():
 
 @app.route('/api/history')
 def api_history():
-    return jsonify({'records': manager.records()})
+    colab = manager.colab_records()
+    return jsonify({'records': manager.records(),
+                    'colab_records': colab,
+                    'has_colab': bool(colab)})
+
+
+# ── Colab 連携 ──
+
+@app.route('/api/colab/state')
+def api_colab_state():
+    url, branch = colab_notebook_url()
+    return jsonify({
+        'notebook_url': url,
+        'branch': branch,
+        'files': colab_files(),
+        'expects': os.path.basename(manager.log_file),
+        'dir': os.path.relpath(COLAB_DIR, _BASE),
+    })
+
+
+@app.route('/api/colab/import', methods=['POST'])
+def api_colab_import():
+    """Colab からダウンロードしたファイルを取り込む。
+
+    zip は展開して中の .json だけ拾う。Colab の最後のセルが zip を1つ出すので、
+    それをそのまま放り込めば済むようにしてある。
+    """
+    os.makedirs(COLAB_DIR, exist_ok=True)
+    saved, skipped = [], []
+
+    def keep(name, data):
+        base = os.path.basename(name)
+        if not base.endswith('.json'):
+            skipped.append(base or name)
+            return
+        try:
+            json.loads(data.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            skipped.append(f'{base}（JSONとして読めない）')
+            return
+        with open(os.path.join(COLAB_DIR, base), 'wb') as f:
+            f.write(data)
+        saved.append(base)
+
+    for storage in request.files.getlist('files'):
+        raw = storage.read()
+        if storage.filename.lower().endswith('.zip'):
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                    for info in z.infolist():
+                        if not info.is_dir():
+                            keep(info.filename, z.read(info))
+            except zipfile.BadZipFile:
+                skipped.append(f'{storage.filename}（zipとして開けない）')
+        else:
+            keep(storage.filename, raw)
+
+    msg = f'{len(saved)} 件を取り込みました' if saved else '取り込めるファイルがありませんでした'
+    if skipped:
+        msg += f'（無視: {", ".join(skipped[:5])}）'
+    return jsonify({'ok': bool(saved), 'message': msg,
+                    'saved': saved, 'files': colab_files()})
+
+
+@app.route('/api/colab/adopt', methods=['POST'])
+def api_colab_adopt():
+    """取り込んだ重みをゲーム本体が読む場所へ移す。
+
+    上書きになるので、押されたときだけ行う。取り込み＝即採用にはしない。
+    """
+    name = os.path.basename((request.json or {}).get('name', ''))
+    src = os.path.join(COLAB_DIR, name)
+    if not name.startswith('policy_') or not os.path.exists(src):
+        return jsonify({'ok': False, 'message': '重みファイルが見つかりません'})
+    os.makedirs(GAME_MODELS_DIR, exist_ok=True)
+    dst = os.path.join(GAME_MODELS_DIR, name)
+    shutil.copy2(src, dst)
+    return jsonify({'ok': True, 'message': f'{name} をゲームに反映しました'})
+
+
+@app.route('/api/colab/clear', methods=['POST'])
+def api_colab_clear():
+    if os.path.isdir(COLAB_DIR):
+        shutil.rmtree(COLAB_DIR)
+    return jsonify({'ok': True, 'message': '取り込んだファイルを消しました',
+                    'files': []})
 
 
 @app.route('/api/start', methods=['POST'])
