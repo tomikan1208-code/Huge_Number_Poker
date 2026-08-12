@@ -217,7 +217,7 @@ GUI「Colabで学習を開始」 → Colab が開く → Ctrl+F9
                               ↓
         GUI の「結果を取り込む」に zip をドラッグ
                               ↓
-              グラフに点線で重なって比較できる
+            1本の履歴に繋がる（続きから学習も再開できる）
 ```
 
 Google Drive API の認証設定（`credentials.json` など）は要らない。
