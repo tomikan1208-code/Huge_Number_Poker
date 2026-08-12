@@ -12,8 +12,12 @@ const path = require('path');
 
 // ゲームロジックを読み込み
 const crypto = require('crypto');
+const fs = require('fs');
 const { Game, PHASES, DEFAULT_CONFIG, buildDeck, shuffle, decksNeededFor } = require('./js/game.js');
 const { HugeNumber, FormulaEvaluator } = require('./js/engine.js');
+const { AIPlayer } = require('./js/ai.js');
+const AICognition = require('./js/ai-cognition.js');
+const AIPolicy = require('./js/ai-policy.js');
 
 const app = express();
 const server = http.createServer(app);
@@ -59,6 +63,69 @@ const MAX_ROOM_PLAYERS = 8;
 /** 席の持ち主だけが再入室できるようにするための秘密の合言葉 */
 function genSeatToken() {
   return crypto.randomBytes(16).toString('hex');
+}
+
+// ------------------------------------------------------------
+// CPU（オンライン対戦に混ぜられる AI プレイヤー）
+// ------------------------------------------------------------
+
+const AI_LEVELS = ['novice', 'casual', 'skilled', 'expert', 'master'];
+
+/**
+ * 学習済み方策をディスクから読む。
+ * ブラウザ側は fetch で models/policy_<level>.json を取りに行くが、
+ * サーバーには相対URLの基準が無いので fs で読む。
+ * 無ければヒューリスティック方策で動く（ブラウザと同じ挙動）。
+ */
+const _policyCache = new Map();
+function loadPolicyForLevel(level) {
+  if (_policyCache.has(level)) return _policyCache.get(level);
+
+  let policy = null;
+  for (const file of [`models/policy_${level}.json`, 'models/policy.json']) {
+    try {
+      const raw = fs.readFileSync(path.join(__dirname, file), 'utf8');
+      const weights = JSON.parse(raw);
+      if (!weights || !weights.trunk || !weights.heads) continue;
+      if (weights.obs_dim !== AIPolicy.OBS_DIM) {
+        console.log(`[AI] ${file} の観測次元が合いません (${weights.obs_dim} != ${AIPolicy.OBS_DIM})。学習し直しが必要です`);
+        continue;
+      }
+      policy = new AIPolicy.NeuralPolicy(weights);
+      console.log(`[AI] ${file} を読み込みました（${level}）`);
+      break;
+    } catch (e) { /* 次の候補へ */ }
+  }
+
+  _policyCache.set(level, policy);
+  return policy;
+}
+
+/** CPU席をひとつ作る（socket を持たないプレイヤー） */
+function makeCpuSeat(room, level) {
+  const lv = AI_LEVELS.includes(level) ? level : 'casual';
+  const profile = AICognition.getProfile(lv);
+  const used = new Set(room.players.map(p => p.name));
+
+  let name = `CPU ${profile.label}`;
+  for (let n = 2; used.has(name); n++) name = `CPU ${profile.label}${n}`;
+
+  return {
+    id: `cpu-${crypto.randomBytes(4).toString('hex')}`,
+    name,
+    index: room.players.length,
+    isHost: false,
+    connected: true,
+    role: 'player',
+    isCPU: true,
+    aiLevel: lv,
+    token: null, // CPU は再入室しない
+  };
+}
+
+/** 人間のプレイヤー（CPUを除く）だけを数える */
+function humanPlayers(room) {
+  return room.players.filter(p => !p.isCPU);
 }
 
 /*
@@ -120,12 +187,15 @@ function makeRoomState(room) {
     hostId: room.hostId,
     started: room.started,
     canStart: room.players.length >= 2 && !room.started,
+    maxPlayers: MAX_ROOM_PLAYERS,
     players: room.players.map(p => ({
       id: p.id,
       name: p.name,
       index: p.index,
       isHost: p.isHost,
       connected: p.connected,
+      isCPU: !!p.isCPU,
+      aiLevel: p.aiLevel || null,
     })),
     spectators: room.spectators.map(s => ({
       id: s.id,
@@ -137,7 +207,8 @@ function makeRoomState(room) {
 }
 
 function inheritHost(room) {
-  const candidates = room.players.filter(p => p.connected && p.id !== room.hostId);
+  // CPU にホストを渡してはいけない（誰もゲームを開始できなくなる）
+  const candidates = room.players.filter(p => !p.isCPU && p.connected && p.id !== room.hostId);
   if (candidates.length > 0) {
     const nextHost = candidates[Math.floor(Math.random() * candidates.length)];
     room.hostId = nextHost.id;
@@ -279,8 +350,9 @@ function nextHandReadyInfo(room) {
   room.players.forEach((rp, i) => {
     if (room.readyForNext.has(rp.id)) ready.push(i);
   });
+  // CPU はボタンを押さないので待たない
   const needed = room.players.filter((rp, i) =>
-    rp.connected && game.players[i] && !game.players[i].isEliminated).length;
+    !rp.isCPU && rp.connected && game.players[i] && !game.players[i].isEliminated).length;
 
   return { ready, needed };
 }
@@ -320,8 +392,20 @@ function startGame(room, settings) {
     autoCalcMode: !!settings.autoCalcMode,
   };
 
+  const cpuLevels = room.players.map(p => (p.isCPU ? p.aiLevel : null));
+
   const game = new Game(config);
-  game.startGame(room.players.length, room.players.map(p => p.name));
+  game.startGame(room.players.length, room.players.map(p => p.name), { cpuLevels });
+
+  // CPU席の思考エンジンを用意する（席ごとに独立した乱数列を持たせる）
+  room.ai = {};
+  room.players.forEach((p, i) => {
+    if (!p.isCPU) return;
+    room.ai[i] = new AIPlayer(p.aiLevel, {
+      seed: (Math.random() * 1e9) | 0,
+      policy: loadPolicyForLevel(p.aiLevel),
+    });
+  });
 
   room.game = game;
   room.settings = config;
@@ -409,6 +493,9 @@ function broadcastGameState(room) {
   }
 
   emitPerClient(room, 'game-update');
+
+  // 状態を配ったあとで CPU の次の手を予約する（配る前だと自分の手を見逃す）
+  scheduleRoomAI(room);
 }
 
 /**
@@ -418,8 +505,137 @@ function broadcastGameState(room) {
 function emitPerClient(room, event) {
   const roomState = makeRoomState(room);
   for (const c of [...room.players, ...room.spectators]) {
+    if (c.isCPU) continue; // 送り先の socket が無い
     io.to(c.id).emit(event, { gameState: makeGameStateForClient(room, c.id), roomState });
   }
+}
+
+// ============================================================
+// CPU の手番を進める
+//
+// ローカル対戦（ui.js の scheduleAI）と同じ組み立て。
+// 「いま誰の番か」を見て、少し間を置いてから AI に指させる。
+// ============================================================
+
+function clearAiTimers(room) {
+  (room.aiTimers || []).forEach(t => clearTimeout(t));
+  room.aiTimers = [];
+}
+
+function pushAiTimer(room, id) {
+  if (!room.aiTimers) room.aiTimers = [];
+  room.aiTimers.push(id);
+}
+
+function isCpuSeat(room, i) {
+  const rp = room.players[i];
+  return !!(rp && rp.isCPU && room.ai && room.ai[i]);
+}
+
+/** フェーズに応じて CPU の行動を予約する */
+function scheduleRoomAI(room) {
+  clearAiTimers(room);
+  const game = room.game;
+  if (!game || game.isGameOver()) return;
+
+  if (game.phase === PHASES.BETTING_1 || game.phase === PHASES.BETTING_2) {
+    const idx = game.currentPlayerIdx;
+    const p = game.players[idx];
+    if (isCpuSeat(room, idx) && p && p.isActive && !p.isAllIn && !p.isEliminated) {
+      pushAiTimer(room, setTimeout(() => runCpuBet(room, idx), 700 + Math.random() * 900));
+    }
+    return;
+  }
+
+  if (game.phase === PHASES.EXCHANGE) {
+    game.players.forEach((p, i) => {
+      if (isCpuSeat(room, i) && p.isActive && !p.isReady) {
+        pushAiTimer(room, setTimeout(() => runCpuExchange(room, i), 600 + Math.random() * 1400));
+      }
+    });
+    return;
+  }
+
+  if (game.phase === PHASES.CALCULATION) scheduleCpuCalculation(room);
+}
+
+function runCpuBet(room, idx) {
+  const game = room.game;
+  if (!game || (game.phase !== PHASES.BETTING_1 && game.phase !== PHASES.BETTING_2)) return;
+  if (game.currentPlayerIdx !== idx || !isCpuSeat(room, idx)) return;
+
+  let decision;
+  try {
+    decision = room.ai[idx].act(game, idx);
+  } catch (e) {
+    decision = { action: 'fold', amount: 0 };
+  }
+
+  let res = game.playerAction(idx, decision.action, decision.amount || 0);
+  if (!res.ok) {
+    // 保険: 想定外の額などで弾かれたら、通せる行動に落とす
+    const p = game.players[idx];
+    const toCall = game.currentBet - p.currentBet;
+    res = game.playerAction(idx, toCall > 0 ? 'call' : 'check');
+    if (!res.ok) game.playerAction(idx, 'fold');
+  }
+  broadcastGameState(room);
+}
+
+function runCpuExchange(room, idx) {
+  const game = room.game;
+  if (!game || game.phase !== PHASES.EXCHANGE || !isCpuSeat(room, idx)) return;
+  const p = game.players[idx];
+  if (!p.isActive || p.isReady) return;
+
+  let ids = [];
+  try { ids = room.ai[idx].exchange(game, idx) || []; } catch (e) { ids = []; }
+  game.selectExchangeCards(idx, ids);
+  game.readyExchange(idx);
+  broadcastGameState(room);
+}
+
+/**
+ * 計算フェーズ。
+ * 「どの式を出すか / 当たるか外すか / 何秒かかるか」はフェーズ開始時に1回だけ決める。
+ * 人間が操作するたびに再抽選されると、CPUの強さが操作回数で変わってしまう。
+ */
+function scheduleCpuCalculation(room) {
+  const game = room.game;
+  if (!game._aiCalcPlan) {
+    game._aiCalcPlan = {};
+    const now = Date.now();
+    game.players.forEach((p, i) => {
+      if (!isCpuSeat(room, i) || !p.isActive || p.hasSubmitted) return;
+      let plan;
+      try { plan = room.ai[i].submit(game, i); } catch (e) { plan = { timedOut: true }; }
+      plan.dueAt = now + Math.max(1200, (plan.thinkSeconds || 5) * 1000);
+      game._aiCalcPlan[i] = plan;
+    });
+  }
+
+  const now = Date.now();
+  Object.keys(game._aiCalcPlan).forEach(k => {
+    const i = Number(k);
+    const plan = game._aiCalcPlan[i];
+    const p = game.players[i];
+    if (!p || p.hasSubmitted || !p.isActive) return;
+    if (plan.timedOut || !plan.formula || plan.declared == null) return; // 間に合わず未提出
+    pushAiTimer(room, setTimeout(() => runCpuSubmit(room, i), Math.max(0, plan.dueAt - now)));
+  });
+}
+
+function runCpuSubmit(room, idx) {
+  const game = room.game;
+  if (!game || game.phase !== PHASES.CALCULATION) return;
+  const p = game.players[idx];
+  const plan = game._aiCalcPlan && game._aiCalcPlan[idx];
+  if (!p || !p.isActive || p.hasSubmitted || !plan) return;
+  if (plan.timedOut || !plan.formula || plan.declared == null) return;
+
+  const res = game.submitFormula(idx, plan.formula, plan.declared);
+  if (!res.ok) return;
+  broadcastGameState(room);
 }
 
 /** プレイヤーアクション処理 */
@@ -654,7 +870,49 @@ io.on('connection', (socket) => {
       });
     }
 
+    // 進行中の部屋に途中から入った人（観戦者）にも、いまの状態を渡す。
+    // これが無いと、次に誰かが動くまで空の卓を見せることになる。
+    // 全員抜けて止まっていた部屋なら、ここでタイマーとCPUも動き出す。
+    if (room.started && room.game) {
+      broadcastGameState(room);
+      socket.emit('sync-full-state', { gameState: makeGameStateForClient(room, socket.id) });
+    }
+
     emitRoomState(room);
+  });
+
+  // ===== CPU を席に追加 / 外す（ホストのみ・開始前だけ） =====
+  socket.on('add-cpu', ({ level }, callback) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+    if (room.hostId !== socket.id) { callback?.({ ok: false, error: 'Only host can add CPU' }); return; }
+    if (room.started) { callback?.({ ok: false, error: 'Already started' }); return; }
+    if (room.players.length >= MAX_ROOM_PLAYERS) { callback?.({ ok: false, error: 'Room is full' }); return; }
+
+    const seat = makeCpuSeat(room, level);
+    room.players.push(seat);
+    console.log(`[CPU追加] ${room.id}: ${seat.name} (${seat.aiLevel})`);
+
+    emitRoomState(room);
+    callback?.({ ok: true, id: seat.id, name: seat.name });
+  });
+
+  socket.on('remove-cpu', ({ id }, callback) => {
+    const room = rooms.get(socket.data.roomId);
+    if (!room) return;
+    if (room.hostId !== socket.id) { callback?.({ ok: false, error: 'Only host can remove CPU' }); return; }
+    if (room.started) { callback?.({ ok: false, error: 'Already started' }); return; }
+
+    // id 指定ならその1席、無指定なら最後に足した1席だけ外す
+    const target = id
+      ? room.players.findIndex(p => p.isCPU && p.id === id)
+      : room.players.map(p => !!p.isCPU).lastIndexOf(true);
+    if (target < 0) { callback?.({ ok: false, error: 'CPU not found' }); return; }
+
+    room.players.splice(target, 1);
+    reindexPlayers(room);
+    emitRoomState(room);
+    callback?.({ ok: true });
   });
 
   // ===== ゲーム開始（ホストのみ） =====
@@ -746,17 +1004,6 @@ io.on('connection', (socket) => {
     socket.emit('sync-full-state', { gameState: state });
   });
 
-  // ===== チャット =====
-  socket.on('chat', ({ message }) => {
-    const roomId = socket.data.roomId;
-    if (!roomId) return;
-    const room = rooms.get(roomId);
-    if (!room) return;
-    const all = [...room.players, ...room.spectators];
-    const sender = all.find(p => p.id === socket.id);
-    io.to(roomId).emit('chat', { from: sender?.name || '未知', message });
-  });
-
   // ===== 切断 =====
   socket.on('disconnect', () => {
     const roomId = socket.data.roomId;
@@ -780,16 +1027,20 @@ io.on('connection', (socket) => {
       inheritHost(room);
     }
 
-    const hasConnected = room.players.some(p => p.connected) ||
+    // CPU は常に connected なので、人間だけで数える
+    const hasConnected = humanPlayers(room).some(p => p.connected) ||
                          room.spectators.some(s => s.connected);
     if (!hasConnected) {
       if (room.deleteTimer) clearTimeout(room.deleteTimer);
-      // 全員切断中はフェーズタイマーも止める。再入室時に張り直せるようキーも消す。
+      // 全員切断中はフェーズタイマーも CPU の思考も止める。
+      // 再入室時に張り直せるようキーも消す。
       clearRoomTimer(room);
+      clearAiTimers(room);
       room._timerKey = null;
       room.deleteTimer = setTimeout(() => {
         console.log(`[部屋削除] ${roomId} (全員切断)`);
         clearRoomTimer(room);
+        clearAiTimers(room);
         rooms.delete(roomId);
       }, 30 * 60 * 1000);
       return;

@@ -64,6 +64,18 @@ class OnlineManager {
     });
   }
 
+  /** CPUを席に追加（ホストのみ・開始前だけ） */
+  addCpu(level, cb) {
+    if (!this.socket || !this.roomCode) return;
+    this.socket.emit('add-cpu', { level }, cb);
+  }
+
+  /** CPUを席から外す。id を省くと最後に足した1席を外す */
+  removeCpu(id, cb) {
+    if (!this.socket || !this.roomCode) return;
+    this.socket.emit('remove-cpu', { id: id || null }, cb);
+  }
+
   /** ゲーム開始（ホストのみ呼べる） */
   startGame(settings, cb) {
     if (!this.socket || !this.roomCode) return;
@@ -80,12 +92,6 @@ class OnlineManager {
   requestFullState() {
     if (!this.socket || !this.roomCode) return;
     this.socket.emit('request-sync');
-  }
-
-  /** チャット送信 */
-  sendChat(message) {
-    if (!this.socket || !this.roomCode) return;
-    this.socket.emit('chat', { message });
   }
 
   _setupListeners() {
@@ -134,11 +140,6 @@ class OnlineManager {
     // 参加エラー
     this.socket.on('join-error', (msg) => {
       if (this.callbacks.onJoinError) this.callbacks.onJoinError(msg);
-    });
-
-    // チャット
-    this.socket.on('chat', (data) => {
-      if (this.callbacks.onChat) this.callbacks.onChat(data);
     });
 
     // 自分の切断

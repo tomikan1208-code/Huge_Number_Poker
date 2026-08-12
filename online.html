@@ -37,6 +37,21 @@
           <div class="player-list glass">
             <h3>参加者 <span id="player-count">0</span>人</h3>
             <ul id="lobby-player-list"></ul>
+
+            <div id="cpu-controls" class="cpu-controls hidden">
+              <label for="cpu-level-select">CPUを席に入れる</label>
+              <div class="cpu-row">
+                <select id="cpu-level-select">
+                  <option value="novice">初級（中学生）</option>
+                  <option value="casual" selected>中級（高校生）</option>
+                  <option value="skilled">上級（大学生・理系）</option>
+                  <option value="expert">達人（競技者）</option>
+                  <option value="master">超人（トップ競技者）</option>
+                </select>
+                <button id="btn-add-cpu" class="btn-premium secondary" type="button">＋ CPU追加</button>
+                <button id="btn-remove-cpu" class="btn-premium secondary" type="button">− CPU削除</button>
+              </div>
+            </div>
           </div>
 
           <div class="spectator-list glass">

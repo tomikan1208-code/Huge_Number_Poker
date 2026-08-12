@@ -693,5 +693,4 @@
   // ここでも卓を描き直さないと「切断中」表示が次のアクションまで出ない。
   window.handleOnlineRoomState = () => { if (gameState) render(); };
   window.handleOnlineFullStateSync = handleOnlineGameUpdate;
-  window.handleOnlineChat = (data) => notify(`${data.from}: ${data.message}`);
 })();

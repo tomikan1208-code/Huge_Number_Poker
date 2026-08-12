@@ -27,6 +27,10 @@ const spectatorList  = document.getElementById('lobby-spectator-list');
 const playerCount    = document.getElementById('player-count');
 const spectatorCount = document.getElementById('spectator-count');
 const hostSettings   = document.getElementById('host-settings');
+const cpuControls    = document.getElementById('cpu-controls');
+const cpuLevelSelect = document.getElementById('cpu-level-select');
+const btnAddCpu      = document.getElementById('btn-add-cpu');
+const btnRemoveCpu   = document.getElementById('btn-remove-cpu');
 
 let gameInitialized = false;
 
@@ -47,11 +51,13 @@ function renderLobby(roomState) {
     (roomState.players || []).forEach(p => {
       const li = document.createElement('li');
       li.className = 'player-item';
+      const cpuBadge = p.isCPU ? '🤖 ' : '';
       const hostBadge = p.isHost ? ' 👑' : '';
       const meBadge = p.id === om.socket?.id ? ' (あなた)' : '';
-      const disconnected = p.connected ? '' : ' (切断)';
-      li.textContent = `${p.name}${hostBadge}${meBadge}${disconnected}`;
-      if (!p.connected) li.style.opacity = '0.5';
+      const disconnected = (p.isCPU || p.connected) ? '' : ' (切断)';
+      li.textContent = `${cpuBadge}${p.name}${hostBadge}${meBadge}${disconnected}`;
+      if (!p.isCPU && !p.connected) li.style.opacity = '0.5';
+      if (p.isCPU) li.classList.add('cpu-item');
       playerList.appendChild(li);
     });
   }
@@ -73,6 +79,16 @@ function renderLobby(roomState) {
   // ホスト専用UIの表示/非表示
   const isHost = roomState.hostId === om.socket?.id;
   if (hostSettings) hostSettings.classList.toggle('hidden', !isHost);
+
+  // CPU の増減はホストだけ、かつ開始前だけ
+  if (cpuControls) {
+    cpuControls.classList.toggle('hidden', !isHost || roomState.started);
+    const players = roomState.players || [];
+    const max = roomState.maxPlayers || MAX_ROOM_PLAYERS;
+    if (btnAddCpu) btnAddCpu.disabled = players.length >= max;
+    if (btnRemoveCpu) btnRemoveCpu.disabled = !players.some(p => p.isCPU);
+  }
+
   if (btnStart) {
     btnStart.disabled = !isHost || !roomState.canStart;
     const sub = btnStart.querySelector('.btn-sub');
@@ -202,10 +218,6 @@ om.init({
   onDisconnected: () => {
     showStatus('サーバーから切断されました', true);
   },
-
-  onChat: (data) => {
-    if (window.handleOnlineChat) window.handleOnlineChat(data);
-  },
 });
 
 // ===== イベントリスナー =====
@@ -240,6 +252,21 @@ btnSpectate?.addEventListener('click', () => {
 btnCancel?.addEventListener('click', () => {
   forgetSeat();
   location.reload();
+});
+
+btnAddCpu?.addEventListener('click', () => {
+  om.addCpu(cpuLevelSelect?.value || 'casual', (res) => {
+    if (!res?.ok) showStatus(res?.error === 'Room is full'
+      ? `満員です（最大${MAX_ROOM_PLAYERS}人）` : (res?.error || 'CPUを追加できませんでした'), true);
+    else showStatus(`${res.name} を席に入れました`);
+  });
+});
+
+btnRemoveCpu?.addEventListener('click', () => {
+  om.removeCpu(null, (res) => {
+    if (!res?.ok) showStatus(res?.error || 'CPUを外せませんでした', true);
+    else showStatus('CPUを1席外しました');
+  });
 });
 
 btnStart?.addEventListener('click', () => {

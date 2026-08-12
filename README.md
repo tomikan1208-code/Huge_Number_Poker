@@ -22,7 +22,7 @@ Windows なら `start.bat` をダブルクリックでも同じ（ポート掃�
 | 遊び方 | 入口 |
 |---|---|
 | CPU と対戦 / 1端末で複数人 | `index.html` → 「1端末で遊ぶ」 |
-| インターネット対戦 | `online.html`（`share-internet.bat` で公開） |
+| インターネット対戦（CPU も混ぜられる） | `online.html`（`share-internet.bat` で公開） |
 | ソロ（スコアアタック） | `index.html` → 「ソロモード」 |
 | AI のテストプレイ場 | `index.html` → 「AIテスト場」（`/lab`） |
 
@@ -164,6 +164,7 @@ node train/env_server.js --selfplay 300 --level skilled
 学習した重みは `models/policy_<レベル>.json` に出る。
 ゲーム側が自動で読み、そのレベルの CPU が学習済みの打ち方をする
 （無ければヒューリスティック方策で動くので、学習しなくても遊べる）。
+1端末対戦はブラウザが fetch で、インターネット対戦はサーバーが fs で読む。どちらも同じ重み。
 
 ---
 
