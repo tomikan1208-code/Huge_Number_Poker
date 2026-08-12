@@ -321,6 +321,8 @@ td.num { text-align: right; }
 .chart-box { position: relative; width: 100%; }
 .chart-box svg { display: block; width: 100%; }
 .chart-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.legend { display: flex; gap: 1rem; align-items: center; }
+
 .legend-item { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink2); }
 .legend-swatch { width: 18px; height: 0; border-top: 2px solid var(--ink); }
 .legend-swatch.dashed { border-top-style: dashed; border-color: var(--ink3); }
@@ -511,4 +513,64 @@ td.num { text-align: right; }
     .tabbar { padding: 12px 16px 0; }
     .brand-sub { display: none; }
     .gen-metrics { grid-template-columns: 1fr; }
+}
+
+
+/* ==================== Colab タブ ==================== */
+
+.colab-body { padding: 1rem 1.1rem 1.2rem; }
+
+.colab-lead { margin: 0 0 .6rem; line-height: 1.8; }
+
+.colab-warn {
+    margin: 0 0 .9rem;
+    padding: .6rem .8rem;
+    border-left: 3px solid var(--warn, #e0a03a);
+    background: rgba(224, 160, 58, .08);
+    border-radius: 0 6px 6px 0;
+    font-size: .86rem;
+    line-height: 1.75;
+}
+
+.colab-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin: .6rem 0; }
+
+.colab-url {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: .74rem;
+    word-break: break-all;
+    opacity: .65;
+    margin-top: .4rem;
+}
+
+.colab-msg { min-height: 1.4em; font-size: .85rem; margin: .6rem 0; }
+.colab-msg.ok { color: var(--ok, #4ec9a0); }
+.colab-msg.ng { color: var(--danger, #e06c6c); }
+
+/* 取り込み用のドロップ領域。押せることが分かる見た目にする */
+.dropzone {
+    border: 2px dashed rgba(255, 255, 255, .18);
+    border-radius: 10px;
+    padding: 1.4rem 1rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone.over {
+    border-color: var(--accent, #6c8cff);
+    background: rgba(108, 140, 255, .07);
+}
+.dropzone-icon { font-size: 1.8rem; }
+.dropzone-main { font-weight: bold; margin-top: .35rem; }
+.dropzone-sub { font-size: .78rem; opacity: .6; margin-top: .2rem; }
+
+#colabTable { width: 100%; }
+#colabTable td, #colabTable th { white-space: nowrap; }
+
+kbd {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: .8em;
+    padding: .1em .4em;
+    border: 1px solid rgba(255, 255, 255, .2);
+    border-bottom-width: 2px;
+    border-radius: 4px;
 }

@@ -33,6 +33,7 @@
     <div class="segmented" id="tabbar">
         <button data-tab="progress" class="active">進捗</button>
         <button data-tab="charts">グラフ</button>
+        <button data-tab="colab">Colab</button>
     </div>
 </nav>
 
@@ -79,6 +80,65 @@
             <span class="filter-note">数値の一覧は「進捗」タブの表で確認できます</span>
         </div>
         <div id="chartCards"></div>
+    </section>
+
+    <!-- ==================== Colab ==================== -->
+    <section class="view" id="view-colab">
+
+        <div class="card">
+            <div class="card-head">
+                <div class="card-title">① Colab で学習する</div>
+                <div class="card-note">GPU/CPU を無料で長時間まわせる</div>
+            </div>
+            <div class="colab-body">
+                <p class="colab-lead">
+                    ボタンを押すと <b>Colab がこのリポジトリのノートブックを開いた状態</b>で立ち上がります。
+                    あとは <kbd>Ctrl</kbd>+<kbd>F9</kbd>（ランタイム → すべてのセルを実行）だけ。
+                </p>
+                <p class="colab-warn">
+                    ブラウザから他人のノートを勝手に実行させることは Colab の仕組み上できません。
+                    <b>実行の一押しだけは手で必要</b>です。設定はノートの ① のフォームで変えられます。
+                </p>
+                <div class="colab-actions">
+                    <button class="btn btn-primary" id="colabOpenBtn">🚀 Colabで学習を開始</button>
+                    <button class="btn btn-ghost" id="colabCopyBtn">🔗 URLをコピー</button>
+                </div>
+                <div class="colab-url" id="colabUrl"></div>
+                <p class="field-help" id="colabBranchNote"></p>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <div class="card-title">② 結果を取り込む</div>
+                <div class="card-note" id="colabExpect"></div>
+            </div>
+            <div class="colab-body">
+                <div class="dropzone" id="colabDrop">
+                    <div class="dropzone-icon">📥</div>
+                    <div class="dropzone-main">Colab の ④ が出した zip をここにドラッグ</div>
+                    <div class="dropzone-sub">クリックしてファイルを選ぶこともできます（.zip / .json）</div>
+                    <input type="file" id="colabFile" multiple accept=".zip,.json" hidden>
+                </div>
+                <div class="colab-msg" id="colabMsg"></div>
+                <div class="table-wrap">
+                    <table id="colabTable">
+                        <thead><tr>
+                            <th>ファイル</th><th>種類</th><th>中身</th><th>取り込み日時</th><th></th>
+                        </tr></thead>
+                        <tbody id="colabTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="colab-actions">
+                    <button class="btn btn-ghost" id="colabClearBtn">取り込んだものを消す</button>
+                </div>
+                <p class="field-help">
+                    取り込んだログは<b>ローカルの学習結果を上書きしません</b>。
+                    グラフに<b>点線</b>で重なって、手元で回した結果と見比べられます。
+                </p>
+            </div>
+        </div>
+
     </section>
 
 </main>
