@@ -204,6 +204,8 @@ def colab_files():
             info['kind'] = 'policy'
             info['obs_dim'] = w.get('obs_dim')
             info['episode'] = w.get('episode')
+        elif name.endswith('.pt'):
+            info['kind'] = 'checkpoint'
         else:
             info['kind'] = 'other'
         out.append(info)
@@ -363,23 +365,72 @@ class TrainingManager:
         return os.path.join(COLAB_DIR, os.path.basename(self.log_file))
 
     def colab_records(self):
-        """Colab で回した結果。ローカルとは混ぜず、別系列として返す。
-
-        混ぜると「どちらで出た数字か」が分からなくなる。
-        グラフでは点線で重ねて、比べられるようにする。
-        """
+        """取り込んだ Colab 側のログ"""
         return self._parse_log(self.colab_log_path())
+
+    def _canonical(self):
+        """ローカルと Colab を **1本の履歴** に畳む。
+
+        ============================================================
+        考え方
+        ============================================================
+        手元と Colab は「別の実験」ではなく **同じ学習の続き**。
+        Colab で 100世代まで回して持ち帰り、手元で 120世代まで進める、
+        という使い方が普通なので、2本の線で並べても意味がない。
+
+        ぶつかったとき（同じ世代番号が両方にある）は
+        **世代が進んでいるほうを正史**にして上書きする。
+        より先まで回ったほうが後から続きをやった側だから。
+
+        正史に無い世代は、もう一方から埋める。
+        （途中だけ相手側にある、という穴が空かないように）
+
+        @returns (records, info)
+        """
+        local = self._disk_records()
+        colab = self.colab_records()
+
+        def top(recs):
+            return max((r.get('episode') or 0) for r in recs) if recs else 0
+
+        lmax, cmax = top(local), top(colab)
+        if not colab:
+            return local, {'canon': 'local', 'local_max': lmax, 'colab_max': 0,
+                           'overlap': 0, 'has_colab': False}
+        if not local:
+            return colab, {'canon': 'colab', 'local_max': 0, 'colab_max': cmax,
+                           'overlap': 0, 'has_colab': True}
+
+        canon_name = 'colab' if cmax > lmax else 'local'
+        canon, other = (colab, local) if canon_name == 'colab' else (local, colab)
+
+        merged = {}
+        for rec in other:                       # 先に負けたほうを敷く
+            merged[rec['episode']] = dict(rec, source=('colab' if other is colab else 'local'))
+        overlap = 0
+        for rec in canon:                       # 正史で上書き
+            if rec['episode'] in merged:
+                overlap += 1
+            merged[rec['episode']] = dict(rec, source=canon_name)
+
+        return [merged[e] for e in sorted(merged)], {
+            'canon': canon_name, 'local_max': lmax, 'colab_max': cmax,
+            'overlap': overlap, 'has_colab': True,
+        }
+
+    def merge_info(self):
+        return self._canonical()[1]
 
     def records(self):
         """ディスクの確定値に、標準出力のライブ値を重ねる。SSEが頻繁に呼ぶのでキャッシュする。"""
         with self._lock:
             sig = (len(self.live_stats),
                    json.dumps(self.live_stats[-1], sort_keys=True) if self.live_stats else '')
-        sig = (_mtime(self.log_file), sig)
+        sig = (_mtime(self.log_file), _mtime(self.colab_log_path()), sig)
         if self._merged_sig == sig:
             return self._merged_cache
 
-        by_ep = {r['episode']: dict(r) for r in self._disk_records()}
+        by_ep = {r['episode']: dict(r) for r in self._canonical()[0]}
         with self._lock:
             live_stats = list(self.live_stats)
         for entry in live_stats:
@@ -422,7 +473,9 @@ class TrainingManager:
             'pace_sec': self._pace(records),
             'logs': logs,
             # これが変わったときだけフロントが /api/history を取り直す
-            'log_version': f'{_mtime(self.log_file):.3f}:{len(records)}',
+            'log_version': (f'{_mtime(self.log_file):.3f}:'
+                            f'{_mtime(self.colab_log_path()):.3f}:{len(records)}'),
+            'merge': self.merge_info(),
         }
 
 
@@ -447,10 +500,8 @@ def api_status():
 
 @app.route('/api/history')
 def api_history():
-    colab = manager.colab_records()
     return jsonify({'records': manager.records(),
-                    'colab_records': colab,
-                    'has_colab': bool(colab)})
+                    'merge': manager.merge_info()})
 
 
 # ── Colab 連携 ──
@@ -479,6 +530,13 @@ def api_colab_import():
 
     def keep(name, data):
         base = os.path.basename(name)
+        # .pt はチェックポイント本体。これが無いと「続きから学習」ができない。
+        # ログと重みだけ持ち帰っても、グラフが繋がるだけで学習は最初からになる。
+        if base.endswith('.pt'):
+            with open(os.path.join(COLAB_DIR, base), 'wb') as f:
+                f.write(data)
+            saved.append(base)
+            return
         if not base.endswith('.json'):
             skipped.append(base or name)
             return
@@ -513,18 +571,62 @@ def api_colab_import():
 
 @app.route('/api/colab/adopt', methods=['POST'])
 def api_colab_adopt():
-    """取り込んだ重みをゲーム本体が読む場所へ移す。
+    """取り込んだファイルを実際に使う場所へ移す。
 
     上書きになるので、押されたときだけ行う。取り込み＝即採用にはしない。
+
+      policy_*.json  → models/            ゲーム本体が読む重み
+      *.pt           → train/models/      ここから学習を続ける
+      *_log.json     → train/models/      グラフの履歴を正史に置き換える
     """
     name = os.path.basename((request.json or {}).get('name', ''))
     src = os.path.join(COLAB_DIR, name)
-    if not name.startswith('policy_') or not os.path.exists(src):
-        return jsonify({'ok': False, 'message': '重みファイルが見つかりません'})
-    os.makedirs(GAME_MODELS_DIR, exist_ok=True)
-    dst = os.path.join(GAME_MODELS_DIR, name)
-    shutil.copy2(src, dst)
-    return jsonify({'ok': True, 'message': f'{name} をゲームに反映しました'})
+    if not name or not os.path.exists(src):
+        return jsonify({'ok': False, 'message': 'ファイルが見つかりません'})
+
+    if name.startswith('policy_') and name.endswith('.json'):
+        os.makedirs(GAME_MODELS_DIR, exist_ok=True)
+        shutil.copy2(src, os.path.join(GAME_MODELS_DIR, name))
+        return jsonify({'ok': True, 'message': f'{name} をゲームに反映しました'})
+
+    if name.endswith('.pt') or name.endswith('_log.json'):
+        dst_dir = os.path.join(_BASE, 'models')
+        os.makedirs(dst_dir, exist_ok=True)
+        shutil.copy2(src, os.path.join(dst_dir, name))
+        what = 'ここから学習を続けられます' if name.endswith('.pt') else '履歴を置き換えました'
+        return jsonify({'ok': True, 'message': f'{name} を採用しました。{what}'})
+
+    return jsonify({'ok': False, 'message': f'{name} は採用の対象外です'})
+
+
+@app.route('/api/colab/continue', methods=['POST'])
+def api_colab_continue():
+    """Colab の結果を丸ごと引き継いで、手元で続きから学習できる状態にする。
+
+    「別々ではなく続き」を1押しで成立させるための入口。
+    ログ・チェックポイント・重みをまとめて所定の場所へ移す。
+    """
+    moved, missing = [], []
+    for f in colab_files():
+        name = f['name']
+        src = os.path.join(COLAB_DIR, name)
+        if name.endswith('.pt') or name.endswith('_log.json'):
+            dst_dir = os.path.join(_BASE, 'models')
+        elif name.startswith('policy_') and name.endswith('.json'):
+            dst_dir = GAME_MODELS_DIR
+        else:
+            continue
+        os.makedirs(dst_dir, exist_ok=True)
+        shutil.copy2(src, os.path.join(dst_dir, name))
+        moved.append(name)
+
+    if not any(n.endswith('.pt') for n in moved):
+        missing.append('チェックポイント(.pt)が無いので、学習は最初からになります')
+
+    msg = (f'{len(moved)} 件を引き継ぎました' if moved else '引き継ぐものがありません')
+    if missing:
+        msg += '（' + ' / '.join(missing) + '）'
+    return jsonify({'ok': bool(moved), 'message': msg, 'moved': moved})
 
 
 @app.route('/api/colab/clear', methods=['POST'])

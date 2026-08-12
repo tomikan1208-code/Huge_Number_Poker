@@ -79,6 +79,7 @@
             </div>
             <span class="filter-note">数値の一覧は「進捗」タブの表で確認できます</span>
         </div>
+        <div class="merge-note" id="mergeNote"></div>
         <div id="chartCards"></div>
     </section>
 
@@ -117,8 +118,8 @@
                 <div class="dropzone" id="colabDrop">
                     <div class="dropzone-icon">📥</div>
                     <div class="dropzone-main">Colab の ④ が出した zip をここにドラッグ</div>
-                    <div class="dropzone-sub">クリックしてファイルを選ぶこともできます（.zip / .json）</div>
-                    <input type="file" id="colabFile" multiple accept=".zip,.json" hidden>
+                    <div class="dropzone-sub">クリックしてファイルを選ぶこともできます（.zip / .json / .pt）</div>
+                    <input type="file" id="colabFile" multiple accept=".zip,.json,.pt" hidden>
                 </div>
                 <div class="colab-msg" id="colabMsg"></div>
                 <div class="table-wrap">
@@ -130,11 +131,18 @@
                     </table>
                 </div>
                 <div class="colab-actions">
+                    <button class="btn btn-primary" id="colabContinueBtn">⏩ 続きとして引き継ぐ</button>
                     <button class="btn btn-ghost" id="colabClearBtn">取り込んだものを消す</button>
                 </div>
                 <p class="field-help">
-                    取り込んだログは<b>ローカルの学習結果を上書きしません</b>。
-                    グラフに<b>点線</b>で重なって、手元で回した結果と見比べられます。
+                    ローカルと Colab は<b>同じ学習の続き</b>として1本の履歴に畳まれます。
+                    同じ世代が両方にあるときは<b>世代が進んでいるほうを正史</b>にして上書きします。
+                    グラフの上に、どちらが正史になったかが出ます。
+                </p>
+                <p class="field-help">
+                    <b>「続きとして引き継ぐ」</b>を押すと、チェックポイントを手元へ移して
+                    <b>そこから学習を再開できる</b>状態にします（重みもゲームへ反映）。
+                    押すまでは手元のファイルに触りません。
                 </p>
             </div>
         </div>
